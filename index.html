@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>SnapLogic + LiveAvatar</title>
+    <script src="https://cdn.jsdelivr.net/npm/@heygen/streaming-avatar@1.0.5/dist/index.min.js"></script>
+    <style>
+        body { font-family: sans-serif; display: flex; flex-direction: column; align-items: center; background-color: #f4f4f9; }
+        
+        /* Video Container */
+        #avatar-container {
+            width: 500px;
+            height: 500px;
+            background-color: #000;
+            margin: 20px;
+            border-radius: 10px;
+            overflow: hidden;
+            position: relative;
+        }
+        video { width: 100%; height: 100%; object-fit: cover; }
+        
+        /* Chat Controls */
+        #chat-box { width: 500px; display: flex; gap: 10px; }
+        input { flex-grow: 1; padding: 10px; border-radius: 5px; border: 1px solid #ccc; }
+        button { padding: 10px 20px; cursor: pointer; border-radius: 5px; border: none; background-color: #007bff; color: white; }
+        button:disabled { background-color: #ccc; }
+        #status { margin-top: 10px; color: #666; font-size: 0.9em; }
+    </style>
+</head>
+<body>
+
+    <div id="avatar-container">
+        <video id="avatar-video" autoplay playsinline></video>
+    </div>
+
+    <button id="start-btn" onclick="startSession()">Start Avatar Session</button>
+    <p id="status">Status: Waiting to start...</p>
+
+    <div id="chat-box" style="display:none;">
+        <input type="text" id="user-input" placeholder="Type to speak..." autofocus>
+        <button id="send-btn" onclick="handleUserSend()">Send</button>
+    </div>
+
+<script>
+    // --- CONFIGURATION ---
+    const AVATAR_ID = "afb36080-1731-42c3-a7f4-520ed77159d9"; // Extracted from your URL
+    
+    // SnapLogic Config
+    const SL_URL = "https://elastic.snaplogic.com/api/1/rest/slsched/feed/YOUR_TASK_URL";
+    const SL_TOKEN = "Tj7HaMlFj9CSd8wm98BwHQ4NHimHPCL1"; 
+
+    // HeyGen Access Token
+    // In production, fetch this from a SnapLogic pipeline so you don't expose your API key!
+    // For testing now, paste a temporary token generated from https://labs.heygen.com/
+    const HEYGEN_ACCESS_TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJjNWZmNzA0NmU2YzY0NzE2YTJlNTVjM2QxYjFmNTljNyIsInNlc3Npb25faWQiOiIyYzdlYWIwZi03MjkyLTQwNjEtYjg5NC01ZDFiNTBjZmQ5ZmEiLCJzb3VyY2UiOiJBUEkiLCJzdGFydF9zZXNzaW9uX2RhdGEiOnsibW9kZSI6IkNVU1RPTSIsImF2YXRhcl9pZCI6ImRjMjkzNWNmLTU4NjMtNGYwOC05NDNiLWM3NDc4YWVhNTlmYiIsImlzX3NhbmRib3giOmZhbHNlLCJsaXZla2l0X2NvbmZpZyI6bnVsbCwiYWdvcmFfY29uZmlnIjpudWxsfSwiZXhwIjoxNzY5NTM2NjQyfQ.9H6s8FsbHx5b2u6r1BpOrcP1FvLUoYwEDJ-cUU_rlKk";
+
+    let avatar = null;
+    let sessionData = null;
+
+    // --- STEP 1: START THE AVATAR SESSION ---
+    async function startSession() {
+        const statusLabel = document.getElementById('status');
+        const videoElement = document.getElementById('avatar-video');
+        
+        statusLabel.innerText = "Status: Initializing Avatar...";
+        
+        try {
+            // Initialize SDK
+            // Note: The SDK is loaded from the CDN script tag above
+            const { StreamingAvatar } = window.StreamingAvatar; 
+            
+            avatar = new StreamingAvatar({
+                token: HEYGEN_ACCESS_TOKEN
+            });
+
+            // Start the stream
+            sessionData = await avatar.createStartAvatar({
+                quality: "high",
+                avatarName: AVATAR_ID,
+            });
+
+            // Connect stream to video element
+            avatar.on('stream-ready', (event) => {
+                videoElement.srcObject = event.detail;
+                videoElement.play().catch(console.error);
+            });
+
+            // Stream established - Show chat UI
+            statusLabel.innerText = "Status: Online";
+            document.getElementById('start-btn').style.display = 'none';
+            document.getElementById('chat-box').style.display = 'flex';
+
+        } catch (error) {
+            console.error("Failed to start avatar:", error);
+            statusLabel.innerText = "Error: " + error.message;
+        }
+    }
+
+    // --- STEP 2: HANDLE USER INPUT ---
+    async function handleUserSend() {
+        const inputField = document.getElementById('user-input');
+        const text = inputField.value;
+        if (!text) return;
+
+        // 1. Send text to SnapLogic
+        const replyText = await sendToSnapLogic(text);
+
+        // 2. Make Avatar Speak the Result
+        if (replyText && avatar) {
+            await avatar.speak({ 
+                text: replyText,
+                task_type: "repeat" 
+            });
+        }
+        
+        inputField.value = "";
+    }
+
+    // --- STEP 3: CALL SNAPLOGIC ---
+    async function sendToSnapLogic(userMessage) {
+        const statusLabel = document.getElementById('status');
+        statusLabel.innerText = "Status: Thinking (SnapLogic)...";
+
+        try {
+            const response = await fetch(SL_URL, {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                    "Authorization": `Bearer ${SL_TOKEN}`
+                },
+                body: JSON.stringify({ message: userMessage })
+            });
+
+            const data = await response.json();
+            statusLabel.innerText = "Status: Speaking...";
+            
+            // Assuming your pipeline returns { "reply": "The response text" }
+            return data.reply; 
+
+        } catch (error) {
+            console.error("SnapLogic Error:", error);
+            statusLabel.innerText = "Status: Error calling pipeline";
+            return "I'm sorry, I couldn't connect to my brain.";
+        }
+    }
+
+    // Clean up session when closing window
+    window.addEventListener('beforeunload', () => {
+        if (avatar) avatar.stopAvatar();
+    });
+
+</script>
+</body>
+</html>
