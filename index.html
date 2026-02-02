@@ -1,4 +1,3 @@
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -33,15 +32,20 @@
 
         .controls { 
             background: white; padding: 20px; border-radius: 8px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.05); display: flex; gap: 10px; align-items: center;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.05); display: flex; flex-direction: column; gap: 15px; align-items: center;
         }
+        .row { display: flex; gap: 10px; width: 100%; justify-content: center; }
+
         input { padding: 10px; width: 350px; border: 1px solid #ccc; border-radius: 4px; }
+        
         button { 
             padding: 10px 20px; cursor: pointer; background-color: #0070f3; color: white;
             border: none; border-radius: 4px; font-weight: 600;
         }
+        button.secondary { background-color: #555; }
         button:disabled { background-color: #ccc; cursor: not-allowed; }
         button#disconnectBtn { background-color: #e00; }
+        
         #status { 
             margin-top: 15px; color: #666; font-family: monospace;
             background: #eee; padding: 8px 12px; border-radius: 4px;
@@ -53,12 +57,18 @@
     <h1>LiveAvatar Client</h1>
     
     <div class="controls">
-        <input type="text" id="sessionToken" placeholder="Paste Session Token" />
-        <button onclick="initSession()">Start & Connect</button>
-        <button onclick="disconnect()" disabled id="disconnectBtn">Disconnect</button>
+        <div class="row">
+            <button class="secondary" onclick="fetchSnapLogicToken()">1. Generate Token from SnapLogic</button>
+        </div>
+
+        <div class="row">
+            <input type="text" id="sessionToken" placeholder="Paste Token or Generate above" />
+            <button onclick="initSession()">2. Start & Connect</button>
+            <button onclick="disconnect()" disabled id="disconnectBtn">Disconnect</button>
+        </div>
     </div>
 
-    <div id="status">Waiting for token...</div>
+    <div id="status">Ready.</div>
 
     <div id="video-container"></div>
 
@@ -70,9 +80,48 @@
             console.log(`[Status] ${msg}`);
         }
 
+        // --- NEW FUNCTION: Fetch Token from SnapLogic ---
+        async function fetchSnapLogicToken() {
+            // The URL you provided
+            const snapUrl = "https://prod-verizoneisdev-cloudplex-fm.snaplogic.io/api/1/rest/feed-master/queue/VerizonEISDev/DeliveryAssurance/shared/Embedded%20Agent%20Task?bearer_token=Tj7HaMlFj9CSd8wm98BwHQ4NHimHPCL1";
+            
+            updateStatus("Requesting token from SnapLogic...");
+
+            try {
+                const response = await fetch(snapUrl, { method: 'GET' }); 
+                
+                if (!response.ok) throw new Error(`SnapLogic Error: ${response.status}`);
+                
+                const data = await response.json();
+                console.log("SnapLogic Response:", data);
+
+                // Try to find the token in the response automatically
+                // Adjust 'data.session_token' if your JSON has a different key
+                let token = data.session_token || data.token || (data.data && data.data.session_token);
+
+                // Fallback: Check nested structure if simple check failed
+                if (!token && data.length > 0 && data[0].session_token) {
+                    token = data[0].session_token;
+                }
+
+                if (token) {
+                    document.getElementById('sessionToken').value = token;
+                    updateStatus("Token generated! Press 'Start & Connect'.");
+                } else {
+                    updateStatus("Token received but key name unknown. Check Console.");
+                    alert("We received a response but couldn't find the 'session_token' key. Check the console (F12) to see the data structure.");
+                }
+
+            } catch (error) {
+                updateStatus(`Token Request Failed: ${error.message}`);
+                console.error("CORS/Network Error:", error);
+            }
+        }
+
+        // --- EXISTING FUNCTION: Start Session & Connect ---
         async function initSession() {
             const token = document.getElementById('sessionToken').value.trim();
-            if (!token) { alert("Please enter a valid Session Token."); return; }
+            if (!token) { alert("Please enter or generate a Session Token."); return; }
 
             updateStatus("Initializing session...");
 
@@ -86,15 +135,13 @@
                 if (!response.ok) throw new Error(`API Error: ${response.status}`);
                 const data = await response.json();
 
-                // 2. Unwrap the response structure
-                // The API returns { code: 1000, data: { ... } }
+                // 2. Unwrap the response
                 const innerData = data.data || data; 
-                
                 console.log("Session Data:", innerData);
 
-                // 3. Extract URL and Token using the EXACT keys from your log
-                const liveKitUrl = innerData.livekit_url;
-                const liveKitToken = innerData.livekit_client_token;
+                // 3. Extract URL and Token
+                const liveKitUrl = innerData.livekit_url || innerData.url;
+                const liveKitToken = innerData.livekit_client_token || innerData.access_token;
 
                 if (!liveKitUrl || !liveKitToken) {
                     throw new Error(`Missing keys. Found: ${Object.keys(innerData).join(", ")}`);
