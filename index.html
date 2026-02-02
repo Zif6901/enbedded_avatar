@@ -3,266 +3,127 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>LiveAvatar1</title>
+    <title>LiveAvatar Browser Client</title>
+    <script src="https://cdn.jsdelivr.net/npm/livekit-client/dist/livekit-client.umd.min.js"></script>
     <style>
-        body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background-color: #f4f4f9;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            height: 100vh;
-            margin: 0;
-        }
-
-        /* Container for the video stream */
-        #avatar-container {
-            width: 500px;
-            height: 500px;
-            background-color: #000;
-            border-radius: 12px;
-            box-shadow: 0 4px 20px rgba(0,0,0,0.2);
-            overflow: hidden;
-            position: relative;
-            margin-bottom: 20px;
-        }
-
-        video {
-            width: 100%;
-            height: 100%;
-            object-fit: cover;
-        }
-
-        /* Status Label */
-        #status {
-            margin-bottom: 15px;
-            font-size: 0.9rem;
-            color: #555;
-            font-weight: 600;
-            min-height: 20px;
-        }
-
-        /* Controls Area */
-        .controls {
-            width: 500px;
-            display: flex;
-            gap: 10px;
-        }
-
-        input[type="text"] {
-            flex-grow: 1;
-            padding: 12px;
-            border: 1px solid #ddd;
-            border-radius: 6px;
-            font-size: 1rem;
-            outline: none;
-        }
-
-        input[type="text"]:focus {
-            border-color: #007bff;
-        }
-
-        button {
-            padding: 12px 24px;
-            background-color: #007bff;
-            color: white;
-            border: none;
-            border-radius: 6px;
-            cursor: pointer;
-            font-size: 1rem;
-            transition: background 0.2s;
-        }
-
-        button:hover {
-            background-color: #0056b3;
-        }
-
-        button:disabled {
-            background-color: #ccc;
-            cursor: not-allowed;
-        }
-
-        /* Helper classes */
-        .hidden { display: none !important; }
+        body { font-family: sans-serif; display: flex; flex-direction: column; align-items: center; padding: 20px; }
+        #video-container { width: 100%; max-width: 640px; aspect-ratio: 16/9; background: #000; margin-top: 20px; position: relative; }
+        video { width: 100%; height: 100%; object-fit: cover; }
+        .controls { margin-bottom: 20px; display: flex; gap: 10px; }
+        input { padding: 8px; width: 300px; }
+        button { padding: 8px 16px; cursor: pointer; }
+        #status { margin-top: 10px; color: #666; }
     </style>
 </head>
 <body>
 
-    <div id="avatar-container">
-        <video id="avatar-video" autoplay playsinline></video>
+    <h1>LiveAvatar Client</h1>
+    
+    <div class="controls">
+        <input type="text" id="sessionToken" placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJjNWZmNzA0NmU2YzY0NzE2YTJlNTVjM2QxYjFmNTljNyIsInNlc3Npb25faWQiOiIyYzdlYWIwZi03MjkyLTQwNjEtYjg5NC01ZDFiNTBjZmQ5ZmEiLCJzb3VyY2UiOiJBUEkiLCJzdGFydF9zZXNzaW9uX2RhdGEiOnsibW9kZSI6IkNVU1RPTSIsImF2YXRhcl9pZCI6ImRjMjkzNWNmLTU4NjMtNGYwOC05NDNiLWM3NDc4YWVhNTlmYiIsImlzX3NhbmRib3giOmZhbHNlLCJsaXZla2l0X2NvbmZpZyI6bnVsbCwiYWdvcmFfY29uZmlnIjpudWxsfSwiZXhwIjoxNzY5NTM2NjQyfQ.9H6s8FsbHx5b2u6r1BpOrcP1FvLUoYwEDJ-cUU_rlKk" />
+        <button onclick="initSession()">Start & Connect</button>
+        <button onclick="disconnect()" disabled id="disconnectBtn">Disconnect</button>
     </div>
 
-    <div id="status">Status: Ready to connect</div>
+    <div id="status">Ready to connect...</div>
 
-    <button id="start-btn" onclick="startSession()">Start Avatar Session</button>
+    <div id="video-container">
+        </div>
 
-    <div id="chat-box" class="controls hidden">
-        <input type="text" id="user-input" placeholder="Type a message to SnapLogic..." disabled>
-        <button id="send-btn" onclick="handleUserSend()" disabled>Send</button>
-    </div>
+    <script>
+        let currentRoom = null;
 
-<script type="module">
-    // --- IMPORT SDK ---
-    // We import directly from the CDN as an ES Module to fix the "undefined" error
-    import StreamingAvatar, { AvatarQuality, TaskType } from "https://cdn.jsdelivr.net/npm/@heygen/streaming-avatar@1.0.5/+esm";
-
-    // --- CONFIGURATION SECTION ---
-    
-    // 1. SNAPLOGIC CREDENTIALS
-    const SL_URL = "https://prod-verizoneisdev-cloudplex-fm.snaplogic.io/api/1/rest/feed-master/queue/VerizonEISDev/DeliveryAssurance/shared/Embedded%20Agent%20Task";
-    const SL_TOKEN = "Tj7HaMlFj9CSd8wm98BwHQ4NHimHPCL1"; 
-
-    // 2. HEYGEN CREDENTIALS
-    // Paste the temporary token you generated via curl or Postman here
-    const HEYGEN_ACCESS_TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJjNWZmNzA0NmU2YzY0NzE2YTJlNTVjM2QxYjFmNTljNyIsInNlc3Npb25faWQiOiIyYzdlYWIwZi03MjkyLTQwNjEtYjg5NC01ZDFiNTBjZmQ5ZmEiLCJzb3VyY2UiOiJBUEkiLCJzdGFydF9zZXNzaW9uX2RhdGEiOnsibW9kZSI6IkNVU1RPTSIsImF2YXRhcl9pZCI6ImRjMjkzNWNmLTU4NjMtNGYwOC05NDNiLWM3NDc4YWVhNTlmYiIsImlzX3NhbmRib3giOmZhbHNlLCJsaXZla2l0X2NvbmZpZyI6bnVsbCwiYWdvcmFfY29uZmlnIjpudWxsfSwiZXhwIjoxNzY5NTM2NjQyfQ.9H6s8FsbHx5b2u6r1BpOrcP1FvLUoYwEDJ-cUU_rlKk";
-    
-    // 3. AVATAR CONFIG
-    const AVATAR_ID = "afb36080-1731-42c3-a7f4-520ed77159d9"; 
-
-    // --- STATE VARIABLES ---
-    let avatar = null;
-    let sessionData = null;
-
-    // --- DOM ELEMENTS ---
-    const videoElement = document.getElementById('avatar-video');
-    const statusLabel = document.getElementById('status');
-    const startBtn = document.getElementById('start-btn');
-    const chatBox = document.getElementById('chat-box');
-    const sendBtn = document.getElementById('send-btn');
-    const inputField = document.getElementById('user-input');
-
-    // --- FUNCTIONS ---
-
-    // 1. Start the Session
-    // Attached to window so the HTML 'onclick' can find it
-    window.startSession = async function() {
-        statusLabel.innerText = "Status: Initializing connection...";
-        startBtn.disabled = true;
-
-        try {
-            // Initialize the SDK
-            avatar = new StreamingAvatar({
-                token: HEYGEN_ACCESS_TOKEN
-            });
-
-            // Start the Video Stream
-            sessionData = await avatar.createStartAvatar({
-                quality: AvatarQuality.High,
-                avatarName: AVATAR_ID,
-            });
-
-            // Handle the video stream event
-            avatar.on('stream-ready', (event) => {
-                // Attach the stream to our <video> element
-                videoElement.srcObject = event.detail;
-                videoElement.play().catch(console.error);
-            });
-
-            // Handle disconnection
-            avatar.on('stream-disconnected', () => {
-                statusLabel.innerText = "Status: Disconnected";
-                resetUI();
-            });
-
-            // Update UI to "Chat Mode"
-            statusLabel.innerText = "Status: Online. Waiting for input.";
-            startBtn.classList.add('hidden');
-            chatBox.classList.remove('hidden');
-            inputField.disabled = false;
-            sendBtn.disabled = false;
-            inputField.focus();
-
-        } catch (error) {
-            console.error("Avatar Error:", error);
-            statusLabel.innerText = "Error: " + error.message;
-            startBtn.disabled = false;
+        // Helper to update status text
+        function updateStatus(msg) {
+            document.getElementById('status').innerText = msg;
+            console.log(msg);
         }
-    };
 
-    // 2. Handle Sending Message
-    window.handleUserSend = async function() {
-        const text = inputField.value;
-        if (!text) return;
+        async function initSession() {
+            const token = document.getElementById('sessionToken').value.trim();
+            if (!token) {
+                alert("Please enter a valid Session Token generated from your backend.");
+                return;
+            }
 
-        // Disable input while processing
-        inputField.disabled = true;
-        sendBtn.disabled = true;
-        
-        try {
-            // A. Send to SnapLogic
-            const replyText = await sendToSnapLogic(text);
+            updateStatus("Starting session...");
 
-            // B. Make Avatar Speak
-            if (replyText && avatar) {
-                statusLabel.innerText = "Status: Avatar speaking...";
-                await avatar.speak({ 
-                    text: replyText,
-                    task_type: TaskType.REPEAT 
+            try {
+                // 1. Start the Session using the Session Token [cite: 71]
+                // This returns the LiveKit URL and Room Token needed to join
+                const response = await fetch('https://api.liveavatar.com/v1/sessions/start', {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${token}`,
+                        'Accept': 'application/json'
+                    }
                 });
+
+                if (!response.ok) throw new Error(`API Error: ${response.statusText}`);
+                
+                const data = await response.json();
+                
+                // The API returns the connection details for the LiveKit room [cite: 72, 73]
+                const liveKitUrl = data.url; 
+                const liveKitToken = data.access_token; // Ensure this matches the actual response key from your specific API version
+
+                // 2. Join the LiveKit Room [cite: 74]
+                await connectToLiveKit(liveKitUrl, liveKitToken);
+
+            } catch (error) {
+                updateStatus(`Error: ${error.message}`);
             }
-            statusLabel.innerText = "Status: Ready for next question.";
-
-        } catch (error) {
-            statusLabel.innerText = "Error: Failed to process.";
-        } finally {
-            // Re-enable input
-            inputField.value = "";
-            inputField.disabled = false;
-            sendBtn.disabled = false;
-            inputField.focus();
         }
-    };
 
-    // 3. Helper: Call SnapLogic Pipeline
-    async function sendToSnapLogic(userMessage) {
-        statusLabel.innerText = "Status: Sending to SnapLogic...";
-        
-        try {
-            const response = await fetch(SL_URL, {
-                method: "POST",
-                headers: {
-                    "Content-Type": "application/json",
-                    "Authorization": `Bearer ${SL_TOKEN}`
-                },
-                body: JSON.stringify({ message: userMessage })
-            });
+        async function connectToLiveKit(url, token) {
+            updateStatus("Connecting to LiveKit Room...");
 
-            if (!response.ok) {
-                throw new Error(`SnapLogic responded with ${response.status}`);
+            try {
+                // Create a new Room instance
+                currentRoom = new LivekitClient.Room({
+                    adaptiveStream: true,
+                    dynacast: true,
+                });
+
+                // Handle media tracks (Video/Audio) subscribed from the Avatar
+                currentRoom.on(LivekitClient.RoomEvent.TrackSubscribed, handleTrackSubscribed);
+                
+                // Handle disconnection
+                currentRoom.on(LivekitClient.RoomEvent.Disconnected, handleDisconnect);
+
+                // Connect to the room
+                await currentRoom.connect(url, token);
+                updateStatus("Connected! Avatar should appear shortly.");
+                
+                document.getElementById('disconnectBtn').disabled = false;
+
+            } catch (error) {
+                updateStatus(`LiveKit Connection Failed: ${error.message}`);
             }
-
-            const data = await response.json();
-            
-            // NOTE: Ensure your SnapLogic pipeline returns JSON with a 'reply' field!
-            // Example: { "reply": "Hello, I am the avatar." }
-            return data.reply || "I received the message but got no reply text.";
-
-        } catch (error) {
-            console.error("SnapLogic Request Failed:", error);
-            statusLabel.innerText = "Status: Pipeline Error";
-            return "I am having trouble connecting to the backend.";
         }
-    }
 
-    // 4. Handle "Enter" Key in Input Box
-    inputField.addEventListener('keypress', (e) => {
-        if (e.key === 'Enter' && !sendBtn.disabled) {
-            window.handleUserSend();
+        function handleTrackSubscribed(track, publication, participant) {
+            // Attach the track to the DOM (Video or Audio)
+            const element = track.attach();
+            document.getElementById('video-container').appendChild(element);
         }
-    });
 
-    // 5. Cleanup on Window Close
-    function resetUI() {
-        startBtn.classList.remove('hidden');
-        chatBox.classList.add('hidden');
-        startBtn.disabled = false;
-    }
+        function handleDisconnect() {
+            updateStatus("Disconnected from room.");
+            const container = document.getElementById('video-container');
+            while (container.firstChild) {
+                container.removeChild(container.firstChild);
+            }
+            document.getElementById('disconnectBtn').disabled = true;
+            currentRoom = null;
+        }
 
-    window.addEventListener('beforeunload', () => {
-        if (avatar) avatar.stopAvatar();
-    });
-
-</script>
+        async function disconnect() {
+            if (currentRoom) {
+                await currentRoom.disconnect();
+                // Note: The session typically closes when the client disconnects 
+            }
+        }
+    </script>
 </body>
 </html>
