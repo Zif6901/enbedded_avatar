@@ -1,21 +1,119 @@
-<script>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LiveAvatar Browser Client</title>
+    <script src="https://cdn.jsdelivr.net/npm/livekit-client/dist/livekit-client.umd.min.js"></script>
+    <style>
+        body { 
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; 
+            display: flex; 
+            flex-direction: column; 
+            align-items: center; 
+            padding: 40px; 
+            background-color: #f5f5f7;
+        }
+        h1 { margin-bottom: 20px; color: #333; }
+        
+        #video-container { 
+            width: 100%; 
+            max-width: 800px; 
+            aspect-ratio: 16/9; 
+            background: #000; 
+            margin-top: 20px; 
+            position: relative; 
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+        
+        video, audio { 
+            width: 100%; 
+            height: 100%; 
+            object-fit: cover; 
+        }
+
+        .controls { 
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+            display: flex; 
+            gap: 10px; 
+            align-items: center;
+        }
+
+        input { 
+            padding: 10px; 
+            width: 350px; 
+            border: 1px solid #ccc; 
+            border-radius: 4px;
+            font-size: 14px;
+        }
+
+        button { 
+            padding: 10px 20px; 
+            cursor: pointer; 
+            background-color: #0070f3;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            font-weight: 600;
+            transition: background 0.2s;
+        }
+        
+        button:hover { background-color: #0051a2; }
+        button:disabled { background-color: #ccc; cursor: not-allowed; }
+        button#disconnectBtn { background-color: #e00; }
+        button#disconnectBtn:hover { background-color: #b00; }
+
+        #status { 
+            margin-top: 15px; 
+            color: #666; 
+            font-family: monospace;
+            background: #eee;
+            padding: 8px 12px;
+            border-radius: 4px;
+        }
+    </style>
+</head>
+<body>
+
+    <h1>LiveAvatar Client</h1>
+    
+    <div class="controls">
+        <input type="text" id="sessionToken" placeholder="Paste your Session Token here (starts with 'st_...')" />
+        <button onclick="initSession()">Start & Connect</button>
+        <button onclick="disconnect()" disabled id="disconnectBtn">Disconnect</button>
+    </div>
+
+    <div id="status">Waiting for token...</div>
+
+    <div id="video-container">
+        </div>
+
+    <script>
         let currentRoom = null;
 
+        // Helper to update status text in UI and Console
         function updateStatus(msg) {
-            document.getElementById('status').innerText = msg;
+            const statusEl = document.getElementById('status');
+            statusEl.innerText = msg;
             console.log(`[Status] ${msg}`);
         }
 
         async function initSession() {
             const token = document.getElementById('sessionToken').value.trim();
             if (!token) {
-                alert("Please enter a valid Session Token.");
+                alert("Please enter a valid Session Token generated from your backend.");
                 return;
             }
 
-            updateStatus("Starting session...");
+            updateStatus("Initializing session...");
 
             try {
+                // 1. Call the Start Session Endpoint
                 const response = await fetch('https://api.liveavatar.com/v1/sessions/start', {
                     method: 'POST',
                     headers: {
@@ -31,21 +129,20 @@
                 
                 const data = await response.json();
                 
-                // --- DEBUGGING STEP ---
-                // Open your browser console (F12) to see this output
+                // --- DEBUGGING: LOG FULL RESPONSE ---
                 console.log("Full API Response:", data); 
 
-                // Attempt to find the correct keys. 
-                // Common variations: data.url, data.ws_url, data.livekit_url
-                const liveKitUrl = data.url || data.ws_url || data.livekit_url;
-                
-                // Common variations: data.access_token, data.token
-                const liveKitToken = data.access_token || data.token;
+                // 2. Extract URL and Token safely
+                // We check multiple common property names to be safe
+                const liveKitUrl = data.url || data.ws_url || data.livekit_url || (data.data && data.data.url);
+                const liveKitToken = data.access_token || data.token || (data.data && data.data.access_token);
 
                 if (!liveKitUrl || !liveKitToken) {
-                    throw new Error("Could not find 'url' or 'token' in API response. Check console for structure.");
+                    console.error("Missing keys in response. Available keys:", Object.keys(data));
+                    throw new Error("Could not find 'url' or 'access_token' in API response. Open console (F12) to see details.");
                 }
 
+                // 3. Connect to LiveKit
                 await connectToLiveKit(liveKitUrl, liveKitToken);
 
             } catch (error) {
@@ -55,21 +152,26 @@
         }
 
         async function connectToLiveKit(url, token) {
-            updateStatus(`Connecting to LiveKit... (URL: ${url})`);
+            updateStatus(`Connecting to Room...`);
 
             try {
+                // Create a new Room instance
                 currentRoom = new LivekitClient.Room({
                     adaptiveStream: true,
                     dynacast: true,
                 });
 
+                // Set up event listeners
                 currentRoom.on(LivekitClient.RoomEvent.TrackSubscribed, handleTrackSubscribed);
                 currentRoom.on(LivekitClient.RoomEvent.Disconnected, handleDisconnect);
-                
-                // This is where your error was happening
+                currentRoom.on(LivekitClient.RoomEvent.ConnectionStateChanged, (state) => {
+                    console.log("Connection State:", state);
+                });
+
+                // Connect to the room
                 await currentRoom.connect(url, token);
                 
-                updateStatus("Connected! Waiting for avatar video...");
+                updateStatus("Connected! Avatar stream should appear momentarily.");
                 document.getElementById('disconnectBtn').disabled = false;
 
             } catch (error) {
@@ -79,14 +181,16 @@
         }
 
         function handleTrackSubscribed(track, publication, participant) {
-            console.log("Track subscribed:", track.kind);
+            console.log(`Track subscribed: ${track.kind}`);
+            // Attach the track to the DOM (Video or Audio)
             const element = track.attach();
             document.getElementById('video-container').appendChild(element);
         }
 
         function handleDisconnect() {
-            updateStatus("Disconnected.");
+            updateStatus("Disconnected from room.");
             const container = document.getElementById('video-container');
+            // Remove video/audio elements
             while (container.firstChild) {
                 container.removeChild(container.firstChild);
             }
@@ -100,3 +204,5 @@
             }
         }
     </script>
+</body>
+</html>
