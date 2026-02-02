@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>SnapLogic + LiveAvatar Chat</title>
+    <title>SnapLogic + LiveAvatar1 Chat</title>
     <style>
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
@@ -95,16 +95,15 @@
 
     <div id="status">Status: Ready to connect</div>
 
-    <button id="start-btn" onclick="startSession()">Start Avatar Session</button>
+    <button id="start-btn">Start Avatar Session</button>
 
     <div id="chat-box" class="controls hidden">
         <input type="text" id="user-input" placeholder="Type a message to SnapLogic..." disabled>
-        <button id="send-btn" onclick="handleUserSend()" disabled>Send</button>
+        <button id="send-btn" disabled>Send</button>
     </div>
 
 <script type="module">
     // --- IMPORT SDK ---
-    // We import directly from the CDN as an ES Module to fix the "undefined" error
     import StreamingAvatar, { AvatarQuality, TaskType } from "https://cdn.jsdelivr.net/npm/@heygen/streaming-avatar@1.0.5/+esm";
 
     // --- CONFIGURATION SECTION ---
@@ -132,11 +131,31 @@
     const sendBtn = document.getElementById('send-btn');
     const inputField = document.getElementById('user-input');
 
+    // --- EVENT LISTENERS (This fixes the 'undefined' error) ---
+    
+    // Connect the Start Button
+    startBtn.addEventListener('click', startSession);
+    
+    // Connect the Send Button
+    sendBtn.addEventListener('click', handleUserSend);
+
+    // Connect the Enter Key
+    inputField.addEventListener('keypress', (e) => {
+        if (e.key === 'Enter' && !sendBtn.disabled) {
+            handleUserSend();
+        }
+    });
+
+    // Cleanup on Window Close
+    window.addEventListener('beforeunload', () => {
+        if (avatar) avatar.stopAvatar();
+    });
+
+
     // --- FUNCTIONS ---
 
     // 1. Start the Session
-    // Attached to window so the HTML 'onclick' can find it
-    window.startSession = async function() {
+    async function startSession() {
         statusLabel.innerText = "Status: Initializing connection...";
         startBtn.disabled = true;
 
@@ -178,10 +197,10 @@
             statusLabel.innerText = "Error: " + error.message;
             startBtn.disabled = false;
         }
-    };
+    }
 
     // 2. Handle Sending Message
-    window.handleUserSend = async function() {
+    async function handleUserSend() {
         const text = inputField.value;
         if (!text) return;
 
@@ -212,7 +231,7 @@
             sendBtn.disabled = false;
             inputField.focus();
         }
-    };
+    }
 
     // 3. Helper: Call SnapLogic Pipeline
     async function sendToSnapLogic(userMessage) {
@@ -235,7 +254,6 @@
             const data = await response.json();
             
             // NOTE: Ensure your SnapLogic pipeline returns JSON with a 'reply' field!
-            // Example: { "reply": "Hello, I am the avatar." }
             return data.reply || "I received the message but got no reply text.";
 
         } catch (error) {
@@ -245,23 +263,11 @@
         }
     }
 
-    // 4. Handle "Enter" Key in Input Box
-    inputField.addEventListener('keypress', (e) => {
-        if (e.key === 'Enter' && !sendBtn.disabled) {
-            window.handleUserSend();
-        }
-    });
-
-    // 5. Cleanup on Window Close
     function resetUI() {
         startBtn.classList.remove('hidden');
         chatBox.classList.add('hidden');
         startBtn.disabled = false;
     }
-
-    window.addEventListener('beforeunload', () => {
-        if (avatar) avatar.stopAvatar();
-    });
 
 </script>
 </body>
