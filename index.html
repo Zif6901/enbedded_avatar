@@ -1,10 +1,9 @@
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>LiveAvatar1</title>
+    <title>LiveAvatar Client with Audio</title>
     <script src="https://cdn.jsdelivr.net/npm/livekit-client/dist/livekit-client.umd.min.js"></script>
     <style>
         body { 
@@ -42,6 +41,10 @@
         }
         button:disabled { background-color: #ccc; cursor: not-allowed; }
         button#disconnectBtn { background-color: #e00; }
+        
+        /* New style for Mute state */
+        button.active-mic { background-color: #e00; }
+        
         #status { 
             margin-top: 15px; color: #666; font-family: monospace;
             background: #eee; padding: 8px 12px; border-radius: 4px;
@@ -55,6 +58,7 @@
     <div class="controls">
         <input type="text" id="sessionToken" placeholder="Paste Session Token" />
         <button onclick="initSession()">Start & Connect</button>
+        <button onclick="toggleMic()" disabled id="micBtn">Turn On Mic</button>
         <button onclick="disconnect()" disabled id="disconnectBtn">Disconnect</button>
     </div>
 
@@ -87,12 +91,10 @@
                 const data = await response.json();
 
                 // 2. Unwrap the response structure
-                // The API returns { code: 1000, data: { ... } }
                 const innerData = data.data || data; 
-                
                 console.log("Session Data:", innerData);
 
-                // 3. Extract URL and Token using the EXACT keys from your log
+                // 3. Extract URL and Token
                 const liveKitUrl = innerData.livekit_url;
                 const liveKitToken = innerData.livekit_client_token;
 
@@ -114,29 +116,72 @@
             try {
                 currentRoom = new LivekitClient.Room({ adaptiveStream: true, dynacast: true });
 
+                // Handle incoming tracks (Avatar video/audio)
                 currentRoom.on(LivekitClient.RoomEvent.TrackSubscribed, (track) => {
                     const element = track.attach();
                     document.getElementById('video-container').appendChild(element);
                 });
                 
+                // Handle disconnection
                 currentRoom.on(LivekitClient.RoomEvent.Disconnected, () => {
                     updateStatus("Disconnected.");
-                    document.getElementById('video-container').innerHTML = '';
-                    document.getElementById('disconnectBtn').disabled = true;
-                    currentRoom = null;
+                    resetUI();
                 });
 
                 await currentRoom.connect(url, token);
                 updateStatus("Connected! Video starting...");
+                
+                // Enable controls
                 document.getElementById('disconnectBtn').disabled = false;
+                document.getElementById('micBtn').disabled = false;
 
             } catch (error) {
                 updateStatus(`Connection Failed: ${error.message}`);
             }
         }
 
+        async function toggleMic() {
+            if (!currentRoom) return;
+
+            const btn = document.getElementById('micBtn');
+            // Check current state
+            const isEnabled = currentRoom.localParticipant.isMicrophoneEnabled;
+
+            try {
+                // Toggle state (this prompts browser permission on first use)
+                await currentRoom.localParticipant.setMicrophoneEnabled(!isEnabled);
+                
+                // Update UI based on new state
+                if (!isEnabled) {
+                    btn.innerText = "Mute Mic";
+                    btn.classList.add("active-mic");
+                    updateStatus("Microphone live!");
+                } else {
+                    btn.innerText = "Turn On Mic";
+                    btn.classList.remove("active-mic");
+                    updateStatus("Microphone muted.");
+                }
+            } catch (error) {
+                console.error(error);
+                updateStatus("Mic Error: Check browser permissions.");
+            }
+        }
+
         async function disconnect() {
             if (currentRoom) await currentRoom.disconnect();
+        }
+
+        function resetUI() {
+            document.getElementById('video-container').innerHTML = '';
+            document.getElementById('disconnectBtn').disabled = true;
+            
+            // Reset Mic Button
+            const micBtn = document.getElementById('micBtn');
+            micBtn.disabled = true;
+            micBtn.innerText = "Turn On Mic";
+            micBtn.classList.remove("active-mic");
+            
+            currentRoom = null;
         }
     </script>
 </body>
