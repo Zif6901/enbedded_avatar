@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>LiveAvatar Client with Audio</title>
+    <title>LiveAvatar Client with Transcript</title>
     <script src="https://cdn.jsdelivr.net/npm/livekit-client/dist/livekit-client.umd.min.js"></script>
     <style>
         body { 
@@ -16,12 +16,34 @@
         }
         h1 { margin-bottom: 20px; color: #333; }
         
+        .main-container {
+            display: flex;
+            gap: 20px;
+            width: 100%;
+            max-width: 1200px;
+            justify-content: center;
+            align-items: flex-start;
+        }
+
+        #left-col {
+            flex: 2;
+            display: flex;
+            flex-direction: column;
+            width: 100%;
+        }
+
+        #right-col {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            width: 100%;
+            height: 100%;
+        }
+
         #video-container { 
             width: 100%; 
-            max-width: 800px; 
             aspect-ratio: 16/9; 
             background: #000; 
-            margin-top: 20px; 
             position: relative; 
             border-radius: 12px;
             overflow: hidden;
@@ -33,18 +55,59 @@
         .controls { 
             background: white; padding: 20px; border-radius: 8px;
             box-shadow: 0 2px 4px rgba(0,0,0,0.05); display: flex; gap: 10px; align-items: center;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
         }
-        input { padding: 10px; width: 350px; border: 1px solid #ccc; border-radius: 4px; }
+        input { padding: 10px; flex-grow: 1; min-width: 200px; border: 1px solid #ccc; border-radius: 4px; }
         button { 
             padding: 10px 20px; cursor: pointer; background-color: #0070f3; color: white;
-            border: none; border-radius: 4px; font-weight: 600;
+            border: none; border-radius: 4px; font-weight: 600; white-space: nowrap;
         }
         button:disabled { background-color: #ccc; cursor: not-allowed; }
         button#disconnectBtn { background-color: #e00; }
-        
-        /* New style for Mute state */
         button.active-mic { background-color: #e00; }
-        
+
+        /* Transcript Styles */
+        #transcript-container {
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            height: 450px; /* Match video height roughly */
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+        #transcript-header {
+            padding: 15px;
+            border-bottom: 1px solid #eee;
+            font-weight: bold;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background: #fafafa;
+        }
+        #transcript-box {
+            flex: 1;
+            padding: 15px;
+            overflow-y: auto;
+            font-family: monospace;
+            font-size: 14px;
+            color: #333;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+        .msg-row { padding: 5px 0; border-bottom: 1px solid #f0f0f0; }
+        .msg-time { color: #999; font-size: 0.8em; margin-right: 8px; }
+        .msg-sender { font-weight: bold; color: #0070f3; margin-right: 5px; }
+        .msg-sender.system { color: #666; }
+
+        #downloadBtn {
+            font-size: 12px;
+            padding: 5px 10px;
+            background-color: #28a745;
+        }
+
         #status { 
             margin-top: 15px; color: #666; font-family: monospace;
             background: #eee; padding: 8px 12px; border-radius: 4px;
@@ -62,16 +125,69 @@
         <button onclick="disconnect()" disabled id="disconnectBtn">Disconnect</button>
     </div>
 
-    <div id="status">Waiting for token...</div>
+    <div class="main-container">
+        <div id="left-col">
+            <div id="video-container"></div>
+            <div id="status">Waiting for token...</div>
+        </div>
 
-    <div id="video-container"></div>
+        <div id="right-col">
+            <div id="transcript-container">
+                <div id="transcript-header">
+                    <span>Conversation Log</span>
+                    <button id="downloadBtn" onclick="downloadTranscript()" disabled>Download .txt</button>
+                </div>
+                <div id="transcript-box">
+                    <div class="msg-row"><span class="msg-sender system">System:</span> Ready.</div>
+                </div>
+            </div>
+        </div>
+    </div>
 
     <script>
         let currentRoom = null;
+        let conversationHistory = []; // Stores text for download
 
         function updateStatus(msg) {
             document.getElementById('status').innerText = msg;
-            console.log(`[Status] ${msg}`);
+            addToTranscript("System", msg);
+        }
+
+        // Helper to add text to the visible box and history array
+        function addToTranscript(sender, text) {
+            const box = document.getElementById('transcript-box');
+            const time = new Date().toLocaleTimeString();
+            
+            // 1. Add to visual UI
+            const div = document.createElement('div');
+            div.className = 'msg-row';
+            div.innerHTML = `<span class="msg-time">[${time}]</span><span class="msg-sender ${sender === 'System' ? 'system' : ''}">${sender}:</span> ${text}`;
+            box.appendChild(div);
+            box.scrollTop = box.scrollHeight; // Auto-scroll to bottom
+
+            // 2. Add to data array (for download)
+            conversationHistory.push(`[${time}] ${sender}: ${text}`);
+            
+            // Enable download button if we have content
+            if (conversationHistory.length > 0) {
+                document.getElementById('downloadBtn').disabled = false;
+            }
+        }
+
+        function downloadTranscript() {
+            if (conversationHistory.length === 0) return;
+            
+            const textContent = conversationHistory.join('\n');
+            const blob = new Blob([textContent], { type: 'text/plain' });
+            const url = URL.createObjectURL(blob);
+            
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `avatar-conversation-${new Date().toISOString().slice(0,19)}.txt`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
         }
 
         async function initSession() {
@@ -81,7 +197,6 @@
             updateStatus("Initializing session...");
 
             try {
-                // 1. Call API
                 const response = await fetch('https://api.liveavatar.com/v1/sessions/start', {
                     method: 'POST',
                     headers: { 'Authorization': `Bearer ${token}`, 'Accept': 'application/json' }
@@ -89,20 +204,13 @@
 
                 if (!response.ok) throw new Error(`API Error: ${response.status}`);
                 const data = await response.json();
-
-                // 2. Unwrap the response structure
                 const innerData = data.data || data; 
-                console.log("Session Data:", innerData);
-
-                // 3. Extract URL and Token
+                
                 const liveKitUrl = innerData.livekit_url;
                 const liveKitToken = innerData.livekit_client_token;
 
-                if (!liveKitUrl || !liveKitToken) {
-                    throw new Error(`Missing keys. Found: ${Object.keys(innerData).join(", ")}`);
-                }
+                if (!liveKitUrl || !liveKitToken) throw new Error("Missing LiveKit connection details.");
 
-                // 4. Connect
                 await connectToLiveKit(liveKitUrl, liveKitToken);
 
             } catch (error) {
@@ -116,13 +224,21 @@
             try {
                 currentRoom = new LivekitClient.Room({ adaptiveStream: true, dynacast: true });
 
-                // Handle incoming tracks (Avatar video/audio)
+                // 1. Handle Video/Audio
                 currentRoom.on(LivekitClient.RoomEvent.TrackSubscribed, (track) => {
                     const element = track.attach();
                     document.getElementById('video-container').appendChild(element);
                 });
+
+                // 2. Handle Text Data from Avatar (Transcriptions)
+                currentRoom.on(LivekitClient.RoomEvent.DataReceived, (payload, participant) => {
+                    const decoder = new TextDecoder();
+                    const strData = decoder.decode(payload);
+                    // Avatars usually send JSON or raw text. We try to display it cleanly.
+                    addToTranscript("Avatar", strData);
+                });
                 
-                // Handle disconnection
+                // 3. Handle Disconnect
                 currentRoom.on(LivekitClient.RoomEvent.Disconnected, () => {
                     updateStatus("Disconnected.");
                     resetUI();
@@ -131,7 +247,6 @@
                 await currentRoom.connect(url, token);
                 updateStatus("Connected! Video starting...");
                 
-                // Enable controls
                 document.getElementById('disconnectBtn').disabled = false;
                 document.getElementById('micBtn').disabled = false;
 
@@ -142,28 +257,23 @@
 
         async function toggleMic() {
             if (!currentRoom) return;
-
             const btn = document.getElementById('micBtn');
-            // Check current state
             const isEnabled = currentRoom.localParticipant.isMicrophoneEnabled;
 
             try {
-                // Toggle state (this prompts browser permission on first use)
                 await currentRoom.localParticipant.setMicrophoneEnabled(!isEnabled);
-                
-                // Update UI based on new state
                 if (!isEnabled) {
                     btn.innerText = "Mute Mic";
                     btn.classList.add("active-mic");
-                    updateStatus("Microphone live!");
+                    addToTranscript("You", "(Microphone Enabled)"); 
                 } else {
                     btn.innerText = "Turn On Mic";
                     btn.classList.remove("active-mic");
-                    updateStatus("Microphone muted.");
+                    addToTranscript("You", "(Microphone Muted)");
                 }
             } catch (error) {
                 console.error(error);
-                updateStatus("Mic Error: Check browser permissions.");
+                updateStatus("Mic Error: Check permissions.");
             }
         }
 
@@ -175,7 +285,6 @@
             document.getElementById('video-container').innerHTML = '';
             document.getElementById('disconnectBtn').disabled = true;
             
-            // Reset Mic Button
             const micBtn = document.getElementById('micBtn');
             micBtn.disabled = true;
             micBtn.innerText = "Turn On Mic";
