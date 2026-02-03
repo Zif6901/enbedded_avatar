@@ -72,7 +72,7 @@
             background: white;
             border-radius: 12px;
             box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-            height: 450px; /* Match video height roughly */
+            height: 450px; 
             display: flex;
             flex-direction: column;
             overflow: hidden;
@@ -97,8 +97,7 @@
             flex-direction: column;
             gap: 8px;
         }
-        .msg-row { padding: 5px 0; border-bottom: 1px solid #f0f0f0; }
-        .msg-time { color: #999; font-size: 0.8em; margin-right: 8px; }
+        .msg-row { padding: 5px 0; border-bottom: 1px solid #f0f0f0; line-height: 1.4; }
         .msg-sender { font-weight: bold; color: #0070f3; margin-right: 5px; }
         .msg-sender.system { color: #666; }
 
@@ -156,17 +155,16 @@
         // Helper to add text to the visible box and history array
         function addToTranscript(sender, text) {
             const box = document.getElementById('transcript-box');
-            const time = new Date().toLocaleTimeString();
             
             // 1. Add to visual UI
             const div = document.createElement('div');
             div.className = 'msg-row';
-            div.innerHTML = `<span class="msg-time">[${time}]</span><span class="msg-sender ${sender === 'System' ? 'system' : ''}">${sender}:</span> ${text}`;
+            div.innerHTML = `<span class="msg-sender ${sender === 'System' ? 'system' : ''}">${sender}:</span> ${text}`;
             box.appendChild(div);
-            box.scrollTop = box.scrollHeight; // Auto-scroll to bottom
+            box.scrollTop = box.scrollHeight; 
 
-            // 2. Add to data array (for download)
-            conversationHistory.push(`[${time}] ${sender}: ${text}`);
+            // 2. Add "Sender: Text" to the download history
+            conversationHistory.push(`${sender}: ${text}`);
             
             // Enable download button if we have content
             if (conversationHistory.length > 0) {
@@ -177,13 +175,15 @@
         function downloadTranscript() {
             if (conversationHistory.length === 0) return;
             
+            // Join messages with new lines
             const textContent = conversationHistory.join('\n');
+            
             const blob = new Blob([textContent], { type: 'text/plain' });
             const url = URL.createObjectURL(blob);
             
             const a = document.createElement('a');
             a.href = url;
-            a.download = `avatar-conversation-${new Date().toISOString().slice(0,19)}.txt`;
+            a.download = `transcript-${new Date().toISOString().slice(0,19)}.txt`;
             document.body.appendChild(a);
             a.click();
             document.body.removeChild(a);
@@ -230,11 +230,10 @@
                     document.getElementById('video-container').appendChild(element);
                 });
 
-                // 2. Handle Text Data from Avatar (Transcriptions)
+                // 2. Handle Text Data from Avatar
                 currentRoom.on(LivekitClient.RoomEvent.DataReceived, (payload, participant) => {
                     const decoder = new TextDecoder();
                     const strData = decoder.decode(payload);
-                    // Avatars usually send JSON or raw text. We try to display it cleanly.
                     addToTranscript("Avatar", strData);
                 });
                 
