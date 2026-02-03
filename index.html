@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>LiveAvatar12</title>
+    <title>LiveAvatar Browser Client</title>
     <script src="https://cdn.jsdelivr.net/npm/livekit-client/dist/livekit-client.umd.min.js"></script>
     <style>
         body { 
@@ -11,25 +11,32 @@
             display: flex; flex-direction: column; align-items: center; padding: 40px; background-color: #f5f5f7;
         }
         h1 { margin-bottom: 20px; color: #333; }
+        
         #video-container { 
             width: 100%; max-width: 800px; aspect-ratio: 16/9; 
             background: #000; margin-top: 20px; position: relative; 
             border-radius: 12px; overflow: hidden; box-shadow: 0 4px 6px rgba(0,0,0,0.1);
         }
+        
         video, audio { width: 100%; height: 100%; object-fit: cover; }
+
         .controls { 
             background: white; padding: 20px; border-radius: 8px;
             box-shadow: 0 2px 4px rgba(0,0,0,0.05); display: flex; gap: 15px; align-items: center;
         }
+
         button { 
             padding: 12px 24px; cursor: pointer; background-color: #0070f3; color: white;
-            border: none; border-radius: 4px; font-weight: 600; font-size: 16px; transition: background 0.2s;
+            border: none; border-radius: 4px; font-weight: 600; font-size: 16px;
+            transition: background 0.2s;
         }
         button:hover { background-color: #0051a2; }
         button:disabled { background-color: #ccc; cursor: not-allowed; }
         button#disconnectBtn { background-color: #e00; }
+        
         #status { 
-            margin-top: 15px; color: #666; font-family: monospace; background: #eee; padding: 8px 12px; border-radius: 4px;
+            margin-top: 15px; color: #666; font-family: monospace;
+            background: #eee; padding: 8px 12px; border-radius: 4px;
         }
     </style>
 </head>
@@ -47,7 +54,7 @@
     <div id="video-container"></div>
 
     <script>
-        // --- CONFIGURATION ---
+        // Your Direct SnapLogic URL (No Proxy needed now!)
         const SNAPLOGIC_URL = "https://elastic.snaplogic.com/api/1/rest/slsched/feed/VerizonEISDev/DeliveryAssurance/shared/Embedded_Agent_Token_Request%20Task?bearer_token=SrXQthJYuwYzd0JmQMyiJo1KqS0uQa7Z";
         
         let currentRoom = null;
@@ -62,7 +69,7 @@
             startBtn.disabled = true;
 
             try {
-                // Step 1: Get Token via Proxy
+                // Step 1: Get Token
                 const sessionToken = await fetchSnapLogicToken();
                 
                 // Step 2: Start Session
@@ -79,36 +86,32 @@
         }
 
         async function fetchSnapLogicToken() {
-            updateStatus("1/3 Requesting token (via Proxy)...");
+            updateStatus("1/3 Requesting token from SnapLogic...");
             
-            // 1. Use AllOrigins Proxy to bypass CORS
-            const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(SNAPLOGIC_URL)}`;
+            // 1. Direct fetch (Works now because of your CORS fix!)
+            const response = await fetch(SNAPLOGIC_URL);
             
-            const response = await fetch(proxyUrl);
-            if (!response.ok) throw new Error(`Proxy Error (${response.status})`);
+            if (!response.ok) throw new Error(`SnapLogic Error (${response.status})`);
             
-            const proxyData = await response.json();
-            
-            // 2. Parse the contents string returned by the proxy
-            // This turns the string back into your real JSON object
-            const json = JSON.parse(proxyData.contents);
-            console.log("Parsed SnapLogic Data:", json);
+            const json = await response.json();
+            console.log("Full SnapLogic Response:", json);
 
-            // 3. Navigate the deep structure from your logs
-            // Structure: { entity: { entity: { data: { session_token: "..." } } } }
-            // We use ?. (optional chaining) to avoid crashes if a key is missing
+            // 2. Navigate the nested structure (entity -> entity -> data -> session_token)
+            // Using optional chaining (?.) to prevent crashes if a field is missing
             let token = json.entity?.entity?.data?.session_token;
 
-            // Fallback locations just in case
-            if (!token) token = json.entity?.data?.session_token;
-            if (!token) token = json.data?.session_token;
-            if (!token) token = json.session_token;
-
+            // Fallback: If structure is slightly different, try finding it elsewhere
             if (!token) {
-                throw new Error("Token not found in JSON. Check console log for 'Parsed SnapLogic Data'.");
+                 token = json.session_token || 
+                         json.data?.session_token || 
+                         json.entity?.data?.session_token;
             }
 
-            console.log("Token retrieved successfully.");
+            if (!token) {
+                throw new Error("Could not find 'session_token' in the nested JSON response. Check console.");
+            }
+
+            console.log("Token found:", token.substring(0, 10) + "...");
             return token;
         }
 
@@ -130,7 +133,7 @@
 
             const data = await response.json();
             
-            // Standard LiveAvatar response parsing
+            // Handle LiveAvatar response structure
             const innerData = data.data || data;
             const url = innerData.livekit_url || innerData.url;
             const access_token = innerData.livekit_client_token || innerData.access_token;
