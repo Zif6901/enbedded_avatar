@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>LiveAvatar Browser Client</title>
+    <title>LiveAvatar Direct Client</title>
     <script src="https://cdn.jsdelivr.net/npm/livekit-client/dist/livekit-client.umd.min.js"></script>
     <style>
         body { 
@@ -21,12 +21,18 @@
         video, audio { width: 100%; height: 100%; object-fit: cover; }
 
         .controls { 
-            background: white; padding: 20px; border-radius: 8px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.05); display: flex; gap: 15px; align-items: center;
+            background: white; padding: 20px; border-radius: 8px; width: 100%; max-width: 500px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.05); display: flex; flex-direction: column; gap: 15px;
         }
 
+        label { font-size: 12px; font-weight: 600; color: #666; margin-bottom: -10px; }
+        input { padding: 10px; border: 1px solid #ccc; border-radius: 4px; font-family: monospace; }
+        
+        .row { display: flex; gap: 10px; }
+        .row button { flex: 1; }
+
         button { 
-            padding: 12px 24px; cursor: pointer; background-color: #0070f3; color: white;
+            padding: 12px; cursor: pointer; background-color: #0070f3; color: white;
             border: none; border-radius: 4px; font-weight: 600; font-size: 16px;
             transition: background 0.2s;
         }
@@ -34,6 +40,11 @@
         button:disabled { background-color: #ccc; cursor: not-allowed; }
         button#disconnectBtn { background-color: #e00; }
         
+        .warning {
+            background-color: #fff3cd; color: #856404; padding: 10px; border-radius: 4px; 
+            margin-bottom: 15px; font-size: 14px; border: 1px solid #ffeeba; text-align: center; max-width: 600px;
+        }
+
         #status { 
             margin-top: 15px; color: #666; font-family: monospace;
             background: #eee; padding: 8px 12px; border-radius: 4px;
@@ -42,21 +53,34 @@
 </head>
 <body>
 
-    <h1>LiveAvatar Client</h1>
+    <h1>LiveAvatar Direct Client</h1>
     
+    <div class="warning">
+        <strong>⚠️ Requirements:</strong> <br>
+        1. Turn your <strong>"Allow CORS"</strong> browser extension ON.<br>
+        2. Enter your LiveAvatar API Key below.
+    </div>
+
     <div class="controls">
-        <button id="startBtn" onclick="startExperience()">Start New Session</button>
-        <button id="disconnectBtn" onclick="disconnect()" disabled>End Session</button>
+        <label>API KEY (X-API-KEY)</label>
+        <input type="password" id="apiKey" placeholder="Paste your API Key here" />
+
+        <label>AVATAR ID</label>
+        <input type="text" id="avatarId" value="240a230f-021b-410c-99f6-0242ac120002" />
+
+        <label>VOICE ID</label>
+        <input type="text" id="voiceId" value="2d68019a-99f6-410c-021b-0242ac120002" />
+
+        <div class="row">
+            <button id="startBtn" onclick="startExperience()">Start Session</button>
+            <button id="disconnectBtn" onclick="disconnect()" disabled>End</button>
+        </div>
     </div>
 
     <div id="status">Ready.</div>
-
     <div id="video-container"></div>
 
     <script>
-        // Your Direct SnapLogic URL (No Proxy needed now!)
-        const SNAPLOGIC_URL = "https://elastic.snaplogic.com/api/1/rest/slsched/feed/VerizonEISDev/DeliveryAssurance/shared/Embedded_Agent_Token_Request%20Task?bearer_token=SrXQthJYuwYzd0JmQMyiJo1KqS0uQa7Z";
-        
         let currentRoom = null;
 
         function updateStatus(msg) {
@@ -64,18 +88,25 @@
             console.log(`[Status] ${msg}`);
         }
 
+        // --- MAIN WORKFLOW ---
         async function startExperience() {
             const startBtn = document.getElementById('startBtn');
+            const apiKey = document.getElementById('apiKey').value.trim();
+            const avatarId = document.getElementById('avatarId').value.trim();
+            const voiceId = document.getElementById('voiceId').value.trim();
+
+            if (!apiKey) { alert("Please enter your API Key."); return; }
+            
             startBtn.disabled = true;
 
             try {
-                // Step 1: Get Token
-                const sessionToken = await fetchSnapLogicToken();
+                // Step 1: Get Token directly from LiveAvatar
+                const sessionToken = await fetchLiveAvatarToken(apiKey, avatarId, voiceId);
                 
                 // Step 2: Start Session
                 const connectionDetails = await initSession(sessionToken);
 
-                // Step 3: Connect to Video
+                // Step 3: Connect Video
                 await connectToLiveKit(connectionDetails.url, connectionDetails.token);
 
             } catch (error) {
@@ -85,38 +116,53 @@
             }
         }
 
-        async function fetchSnapLogicToken() {
-            updateStatus("1/3 Requesting token from SnapLogic...");
-            
-            // 1. Direct fetch (Works now because of your CORS fix!)
-            const response = await fetch(SNAPLOGIC_URL);
-            
-            if (!response.ok) throw new Error(`SnapLogic Error (${response.status})`);
-            
-            const json = await response.json();
-            console.log("Full SnapLogic Response:", json);
+        // --- STEP 1: Generate Token (Direct API Call) ---
+        async function fetchLiveAvatarToken(apiKey, avatarId, voiceId) {
+            updateStatus("1/3 Requesting Token (Direct)...");
 
-            // 2. Navigate the nested structure (entity -> entity -> data -> session_token)
-            // Using optional chaining (?.) to prevent crashes if a field is missing
-            let token = json.entity?.entity?.data?.session_token;
+            const url = "https://api.liveavatar.com/v1/sessions/token";
+            
+            [cite_start]// Construct the body required by LiveAvatar [cite: 68]
+            const body = {
+                mode: "FULL",
+                avatar_id: avatarId,
+                avatar_persona: {
+                    voice_id: voiceId,
+                    language: "en"
+                }
+            };
 
-            // Fallback: If structure is slightly different, try finding it elsewhere
-            if (!token) {
-                 token = json.session_token || 
-                         json.data?.session_token || 
-                         json.entity?.data?.session_token;
+            const response = await fetch(url, {
+                method: "POST",
+                headers: {
+                    "X-API-KEY": apiKey,
+                    "Content-Type": "application/json",
+                    "Accept": "application/json"
+                },
+                body: JSON.stringify(body)
+            });
+
+            if (!response.ok) {
+                const errText = await response.text();
+                // Check specifically for CORS failure masquerading as network error
+                throw new Error(`Token API Error: ${response.status} ${errText}`);
             }
 
-            if (!token) {
-                throw new Error("Could not find 'session_token' in the nested JSON response. Check console.");
-            }
+            const data = await response.json();
+            console.log("Token Response:", data);
 
-            console.log("Token found:", token.substring(0, 10) + "...");
+            [cite_start]// Extract session_token [cite: 69, 70]
+            const token = data.session_token;
+            
+            if (!token) throw new Error("No session_token found in response.");
+            
+            console.log("Token retrieved.");
             return token;
         }
 
+        // --- STEP 2: Initialize Session ---
         async function initSession(token) {
-            updateStatus("2/3 Starting LiveAvatar session...");
+            updateStatus("2/3 Starting Session...");
 
             const response = await fetch('https://api.liveavatar.com/v1/sessions/start', {
                 method: 'POST',
@@ -128,25 +174,24 @@
 
             if (!response.ok) {
                 const errText = await response.text();
-                throw new Error(`LiveAvatar Start Error: ${response.status} ${errText}`);
+                throw new Error(`Start API Error: ${response.status} ${errText}`);
             }
 
             const data = await response.json();
-            
-            // Handle LiveAvatar response structure
             const innerData = data.data || data;
+
+            [cite_start]// Extract Connection Details [cite: 72]
             const url = innerData.livekit_url || innerData.url;
             const access_token = innerData.livekit_client_token || innerData.access_token;
 
-            if (!url || !access_token) {
-                throw new Error("LiveKit URL/Token missing from start response.");
-            }
+            if (!url || !access_token) throw new Error("LiveKit URL/Token missing.");
 
             return { url, token: access_token };
         }
 
+        // --- STEP 3: Connect to LiveKit ---
         async function connectToLiveKit(url, token) {
-            updateStatus("3/3 Connecting to video room...");
+            updateStatus("3/3 Connecting to Video...");
             
             currentRoom = new LivekitClient.Room({ adaptiveStream: true, dynacast: true });
 
@@ -165,7 +210,7 @@
 
             await currentRoom.connect(url, token);
             
-            updateStatus("Session Active! Say hello.");
+            updateStatus("Connected! Say hello.");
             document.getElementById('disconnectBtn').disabled = false;
         }
 
