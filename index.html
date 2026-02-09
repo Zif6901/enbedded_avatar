@@ -41,7 +41,6 @@
         }
         button:disabled { background-color: #ccc; cursor: not-allowed; }
         button#disconnectBtn { background-color: #e00; }
-        
         button.active-mic { background-color: #e00; }
         
         #status { 
@@ -49,7 +48,7 @@
             background: #eee; padding: 8px 12px; border-radius: 4px;
         }
 
-        /* --- NEW STYLES FOR TRANSCRIPT --- */
+        /* --- TRANSCRIPT STYLES --- */
         .transcript-container {
             width: 100%;
             max-width: 800px;
@@ -82,12 +81,14 @@
             line-height: 1.5;
             resize: vertical;
             background-color: #fafafa;
-            box-sizing: border-box; /* Ensures padding doesn't break width */
+            box-sizing: border-box; 
+            white-space: pre-wrap; /* Keeps formatting */
         }
 
         button.download-btn {
             background-color: #28a745;
-            align-self: flex-end;
+            padding: 8px 16px;
+            font-size: 14px;
         }
     </style>
 </head>
@@ -107,23 +108,29 @@
 
     <div class="transcript-container">
         <div class="transcript-header">
-            <h3>Live Transcript</h3>
-            <button onclick="downloadTranscript()" class="download-btn">Download (.txt)</button>
+            <h3>Conversation Transcript</h3>
+            <button onclick="downloadTranscript()" class="download-btn">Download Transcript</button>
         </div>
-        <textarea id="transcriptLog" readonly placeholder="Conversation will appear here..."></textarea>
+        <textarea id="transcriptLog" readonly placeholder="Transcript will appear here..."></textarea>
     </div>
 
     <script>
         let currentRoom = null;
-        let recognition = null; // For local speech recognition
+        let recognition = null; // Local speech recognition instance
+        
         const SNAPLOGIC_URL = "https://tpalpb1wva002.verizon.com:8888/api/1/rest/feed/run/task/VerizonEISDev/DeliveryAssurance/shared/Embedded_Agent_Token_Request%20Task_Gnd?bearer_token=8tn6rpItp0F8RIYNNGq2LECBvdi9is2X";
 
         // --- TRANSCRIPT FUNCTIONS ---
 
         function appendToTranscript(sender, text) {
+            if (!text || text.trim() === "") return; // Don't log empty strings
+
             const log = document.getElementById('transcriptLog');
-            const timestamp = new Date().toLocaleTimeString();
+            const timestamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+            
+            // Format: [12:00:00] Sender: Message
             const entry = `[${timestamp}] ${sender}: ${text}\n`;
+            
             log.value += entry;
             log.scrollTop = log.scrollHeight; // Auto-scroll to bottom
         }
@@ -138,34 +145,39 @@
             const url = window.URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
-            a.download = `transcript-${new Date().toISOString().slice(0,19).replace(/:/g,"-")}.txt`;
+            a.download = `conversation-${new Date().toISOString().slice(0,19).replace(/:/g,"-")}.txt`;
             document.body.appendChild(a);
             a.click();
             document.body.removeChild(a);
             window.URL.revokeObjectURL(url);
         }
 
-        // Initialize Web Speech API for local user transcription
+        // --- SPEECH RECOGNITION (User) ---
         function initSpeechRecognition() {
-            if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
-                const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+            // Check browser support
+            const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+            
+            if (SpeechRecognition) {
                 recognition = new SpeechRecognition();
-                recognition.continuous = true;
-                recognition.interimResults = false;
+                recognition.continuous = true;      // Keep listening even after pauses
+                recognition.interimResults = false; // Only show final results
                 recognition.lang = 'en-US';
 
                 recognition.onresult = (event) => {
+                    // Grab the last result
                     const last = event.results.length - 1;
                     const text = event.results[last][0].transcript;
-                    appendToTranscript("You", text);
+                    
+                    // Log to transcript as "User"
+                    appendToTranscript("User", text);
                 };
 
                 recognition.onerror = (event) => {
-                    console.error("Speech Recognition Error:", event.error);
+                    console.warn("Speech Recognition Warning:", event.error);
                 };
             } else {
                 console.warn("Web Speech API not supported in this browser.");
-                appendToTranscript("System", "Local speech-to-text not supported in this browser.");
+                appendToTranscript("System", "Note: Local speech-to-text not supported in this browser.");
             }
         }
 
@@ -179,7 +191,7 @@
 
         async function initSession() {
             updateStatus("Requesting Token from SnapLogic...");
-            // Clear transcript on new session
+            // Clear transcript
             document.getElementById('transcriptLog').value = ""; 
 
             try {
@@ -200,7 +212,10 @@
                 // 2. Call API to get LiveKit credentials
                 const response = await fetch('https://api.liveavatar.com/v1/sessions/start', {
                     method: 'POST',
-                    headers: { 'Authorization': 'Bearer ' + sessionToken, 'Accept': 'application/json' }
+                    headers: { 
+                        'Authorization': 'Bearer ' + sessionToken, 
+                        'Accept': 'application/json' 
+                    }
                 });
 
                 if (!response.ok) throw new Error("Avatar API Error: " + response.status);
@@ -215,7 +230,7 @@
                 // 3. Connect to LiveKit
                 await connectToLiveKit(liveKitUrl, liveKitToken);
 
-                // Initialize Speech Recognition logic
+                // 4. Initialize local speech recognition setup
                 initSpeechRecognition();
 
             } catch (error) {
@@ -229,29 +244,50 @@
             try {
                 currentRoom = new LivekitClient.Room({ adaptiveStream: true, dynacast: true });
 
-                // Video Handling
+                // Video/Audio Handling
                 currentRoom.on(LivekitClient.RoomEvent.TrackSubscribed, (track) => {
                     const element = track.attach();
                     document.getElementById('video-container').appendChild(element);
                 });
 
-                // --- DATA HANDLING (Agent Text) ---
+                // --- DATA CHANNEL HANDLING (Agent Speech/Events) ---
                 currentRoom.on(LivekitClient.RoomEvent.DataReceived, (payload, participant) => {
                     const decoder = new TextDecoder();
                     const strData = decoder.decode(payload);
                     
-                    // Attempt to parse JSON (common in LiveKit agents) or use raw string
-                    let displayText = strData;
                     try {
+                        // Parse JSON to filter out system events
                         const jsonData = JSON.parse(strData);
-                        if(jsonData.message) displayText = jsonData.message;
-                        else if(jsonData.text) displayText = jsonData.text;
-                    } catch(e) {
-                        // Not JSON, use raw string
-                    }
 
-                    const senderName = participant ? "Avatar" : "System";
-                    appendToTranscript(senderName, displayText);
+                        // FILTER LOGIC:
+                        // 1. Ignore if it's strictly a system event like 'user.speak_ended'
+                        if (jsonData.event_type && (
+                            jsonData.event_type === "user.speak_ended" || 
+                            jsonData.event_type === "user.speak_started" ||
+                            jsonData.event_type === "agent.thinking"
+                        )) {
+                            return; // Do nothing, do not log
+                        }
+
+                        // 2. Extract actual message text
+                        // Adjust these keys based on what your specific agent sends for speech text
+                        let messageText = null;
+                        
+                        if (jsonData.text) messageText = jsonData.text;
+                        else if (jsonData.message) messageText = jsonData.message;
+                        else if (jsonData.transcript) messageText = jsonData.transcript;
+
+                        if (messageText) {
+                            appendToTranscript("AI Eddie", messageText);
+                        }
+
+                    } catch(e) {
+                        // If it's not JSON, it might be a raw text message from the agent
+                        // Only log if it looks like conversation (basic heuristic)
+                        if (strData && strData.length > 0) {
+                             appendToTranscript("AI Eddie", strData);
+                        }
+                    }
                 });
                 
                 currentRoom.on(LivekitClient.RoomEvent.Disconnected, () => {
@@ -278,24 +314,29 @@
             const isEnabled = currentRoom.localParticipant.isMicrophoneEnabled;
 
             try {
+                // Toggle LiveKit Audio
                 await currentRoom.localParticipant.setMicrophoneEnabled(!isEnabled);
                 
                 if (!isEnabled) {
-                    // Mic is now ON
+                    // MIC ON
                     btn.innerText = "Mute Mic";
                     btn.classList.add("active-mic");
                     updateStatus("Microphone live!");
-                    
-                    // Start local transcription
-                    if(recognition) recognition.start();
+
+                    // Start Local Transcript
+                    if (recognition) {
+                        try { recognition.start(); } catch(e) { console.log("Recognition already started"); }
+                    }
                 } else {
-                    // Mic is now OFF
+                    // MIC OFF
                     btn.innerText = "Turn On Mic";
                     btn.classList.remove("active-mic");
                     updateStatus("Microphone muted.");
 
-                    // Stop local transcription
-                    if(recognition) recognition.stop();
+                    // Stop Local Transcript
+                    if (recognition) {
+                        recognition.stop();
+                    }
                 }
             } catch (error) {
                 console.error(error);
