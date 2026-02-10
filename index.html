@@ -16,6 +16,7 @@
         }
         h1 { margin-bottom: 20px; color: #333; }
         
+        /* PROCESSING INDICATOR */
         #processing-bar {
             position: fixed;
             top: 0;
@@ -162,7 +163,7 @@
         let currentRoom = null;
         let recognition = null; 
         
-        // VAD Variables
+        // VAD Variables (Voice Activity Detection)
         let audioInterval = null;
         let isSpeaking = false;
         let silenceTimer = null;
@@ -206,6 +207,7 @@
             a.click();
         }
 
+        // --- SPEECH RECOGNITION (Local Backup) ---
         function initSpeechRecognition() {
             const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
             if (SpeechRecognition) {
@@ -258,23 +260,24 @@
             try {
                 currentRoom = new LivekitClient.Room({ adaptiveStream: true, dynacast: true });
 
-                // 1. VIDEO/AUDIO HANDLING
+                // 1. VIDEO/AUDIO HANDLING (Agent Speaking)
                 currentRoom.on(LivekitClient.RoomEvent.TrackSubscribed, (track) => {
                     document.getElementById('video-container').appendChild(track.attach());
+                    
+                    // When agent audio starts playing, hide "Processing"
                     if (track.kind === LivekitClient.Track.Kind.Audio) {
                          const element = track.attach();
                          element.onplay = () => setProcessing(false);
                     }
                 });
 
-                // 2. AGENT AUDIO ACTIVITY
+                // 2. AGENT AUDIO ACTIVITY (Backup Indicator check)
                 currentRoom.on(LivekitClient.RoomEvent.ActiveSpeakersChanged, (speakers) => {
                     const agentSpeaking = speakers.some(s => !s.isLocal);
                     if (agentSpeaking) setProcessing(false);
                 });
 
                 // 3. DATA HANDLING (Transcript & Response)
-                // FIX: Added logic to distinguish User events from Agent events
                 currentRoom.on(LivekitClient.RoomEvent.DataReceived, (payload) => {
                     const decoder = new TextDecoder();
                     const strData = decoder.decode(payload);
@@ -282,7 +285,7 @@
                     try {
                         const jsonData = JSON.parse(strData);
                         
-                        // Ignore internal status events
+                        // Ignore technical status events
                         if (["user.speak_started", "user.speak_ended", "agent.thinking"].includes(jsonData.event_type)) {
                             return; 
                         }
@@ -290,7 +293,7 @@
                         // Determine Speaker
                         let senderName = "AI Eddie"; 
                         
-                        // Check if this is a user transcript or message
+                        // Check if this is a transcript of the USER
                         if (jsonData.role === 'user' || jsonData.type === 'transcription' || jsonData.type === 'transcript') {
                             senderName = "User";
                         }
@@ -298,14 +301,12 @@
                         let messageText = jsonData.text || jsonData.message || jsonData.transcript;
                         
                         if (messageText) {
-                            // Only hide processing if AI is responding
                             if (senderName === "AI Eddie") {
                                 setProcessing(false);
                             }
                             appendToTranscript(senderName, messageText);
                         }
                     } catch(e) {
-                        // Raw text fallback
                         if (strData && strData.length > 0) {
                              appendToTranscript("AI Eddie", strData);
                         }
@@ -318,6 +319,7 @@
                 document.getElementById('micBtn').disabled = false;
                 document.getElementById('sendBtn').disabled = false;
 
+                // Auto-start Mic & VAD
                 try {
                     await currentRoom.localParticipant.setMicrophoneEnabled(true);
                     document.getElementById('micBtn').classList.add("active-mic");
@@ -343,7 +345,6 @@
                 const audioLevel = currentRoom.localParticipant.audioLevel;
 
                 if (audioLevel > SILENCE_THRESHOLD) {
-                    // USER SPEAKING
                     if (!isSpeaking) {
                         isSpeaking = true;
                         document.getElementById('processing-bar').style.display = 'none';
@@ -354,7 +355,6 @@
                     silenceTimer = null;
                 
                 } else if (isSpeaking) {
-                    // USER STOPPED
                     if (!silenceTimer) {
                         silenceTimer = setTimeout(() => {
                             isSpeaking = false;
@@ -390,7 +390,8 @@
             if (event.key === "Enter") sendTextCommand();
         }
 
-        // --- FIX: TEXT COMMAND SENDING (Command Event) ---
+        // --- NEW: VIRTUAL MIC / AUDIO INJECTION ---
+        // Converts text to audio (Browser TTS) and streams it to LiveKit
         async function sendTextCommand() {
             const inputField = document.getElementById('textCommand');
             const text = inputField.value.trim();
@@ -398,42 +399,74 @@
 
             setProcessing(true); 
             appendToTranscript("User (Text)", text);
+            inputField.value = ""; // Clear input immediately
 
-            // 1. Mute Mic to prevent interference
-            const wasMicEnabled = currentRoom.localParticipant.isMicrophoneEnabled;
-            if (wasMicEnabled) {
-                await currentRoom.localParticipant.setMicrophoneEnabled(false);
-            }
+            updateStatus("Generating Audio (TTS)...");
 
             try {
-                const encoder = new TextEncoder();
-                const timestamp = Date.now();
+                // 1. Disable Real Mic (To avoid double talk)
+                await currentRoom.localParticipant.setMicrophoneEnabled(false);
 
-                // 2. Send Command Payload for Full Mode
-                // Using 'conversation.input' signals the Full Mode session to process this text
-                const commandPayload = JSON.stringify({
-                    type: "conversation.input", 
-                    text: text,
-                    timestamp: timestamp
+                // 2. Generate Audio using Browser Native TTS
+                // We must use a workaround because browsers don't give audio streams from window.speechSynthesis easily.
+                // Instead, we use the Web Audio API to generate a silent buffer and mix in an oscillator to simulate "activity"
+                // OR we can use a free TTS API. 
+                
+                // --- SIMPLEST IMPLEMENTATION: Use Google Translate TTS (Unofficial but effective for demos) ---
+                // Or you can use a real TTS provider if you have a key. 
+                // Here we fetch a blob from a public TTS endpoint.
+                const ttsUrl = `https://translate.google.com/translate_tts?ie=UTF-8&q=${encodeURIComponent(text)}&tl=en&client=tw-ob`;
+                
+                const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                
+                // Fetch Audio
+                const response = await fetch(ttsUrl);
+                const arrayBuffer = await response.arrayBuffer();
+                const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+
+                // Create Source
+                const source = audioContext.createBufferSource();
+                source.buffer = audioBuffer;
+                
+                // Create Destination (Stream)
+                const destination = audioContext.createMediaStreamDestination();
+                source.connect(destination);
+
+                // 3. Publish "Virtual Mic" Track
+                const virtualTrack = destination.stream.getAudioTracks()[0];
+                
+                updateStatus("Speaking to Avatar...");
+                
+                const sender = await currentRoom.localParticipant.publishTrack(virtualTrack, {
+                    name: "virtual-mic",
+                    source: LivekitClient.Track.Source.Microphone
                 });
 
-                await currentRoom.localParticipant.publishData(encoder.encode(commandPayload), { reliable: true });
+                // 4. Play Audio
+                source.start(0);
 
-                inputField.value = "";
-                
+                // 5. Cleanup when done
+                source.onended = async () => {
+                    console.log("TTS Finished");
+                    
+                    // Stop & Unpublish virtual track
+                    virtualTrack.stop();
+                    await currentRoom.localParticipant.unpublishTrack(virtualTrack);
+                    
+                    audioContext.close();
+
+                    // Restore Real Mic
+                    updateStatus("Restoring Mic...");
+                    await currentRoom.localParticipant.setMicrophoneEnabled(true);
+                    updateStatus("Mic Restored");
+                };
+
             } catch (e) {
-                console.error(e);
+                console.error("TTS Error:", e);
                 setProcessing(false);
-                updateStatus("Send Failed");
-            } finally {
-                // 3. Restore Mic after delay
-                if (wasMicEnabled) {
-                    setTimeout(async () => {
-                        try {
-                            await currentRoom.localParticipant.setMicrophoneEnabled(true);
-                        } catch(e) {}
-                    }, 2000); 
-                }
+                updateStatus("TTS Failed");
+                // Restore mic just in case
+                await currentRoom.localParticipant.setMicrophoneEnabled(true);
             }
         }
 
