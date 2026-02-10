@@ -219,7 +219,6 @@
             a.click();
         }
 
-        // --- SPEECH RECOGNITION (Local Backup) ---
         function initSpeechRecognition() {
             const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
             if (SpeechRecognition) {
@@ -241,7 +240,7 @@
             document.getElementById('transcriptLog').value = ""; 
 
             try {
-                // Fix Audio Context
+                // Audio Context Resume
                 const AudioContext = window.AudioContext || window.webkitAudioContext;
                 if (AudioContext) {
                     const ctx = new AudioContext();
@@ -279,9 +278,10 @@
             try {
                 currentRoom = new LivekitClient.Room({ adaptiveStream: true, dynacast: true });
 
-                // 1. MONITOR AGENT AUDIO
+                // 1. MONITOR AGENT AUDIO (Robust Response Detection)
                 currentRoom.on(LivekitClient.RoomEvent.TrackSubscribed, (track, publication, participant) => {
                     document.getElementById('video-container').appendChild(track.attach());
+                    
                     if (track.kind === LivekitClient.Track.Kind.Audio) {
                         const element = track.attach();
                         // Monitor volume to detect speech
@@ -289,20 +289,27 @@
                     }
                 });
 
-                // 2. DATA HANDLING
+                // 2. DATA HANDLING (Universal Response Logic)
                 currentRoom.on(LivekitClient.RoomEvent.DataReceived, (payload) => {
                     const decoder = new TextDecoder();
                     const strData = decoder.decode(payload);
                     try {
                         const jsonData = JSON.parse(strData);
                         
-                        // Stop processing on ANY agent activity
-                        if (jsonData.event_type === "agent.speak_started" || jsonData.event_type === "agent.thinking") {
+                        // UNIVERSAL RESET: If we receive *ANY* text from the agent, stop processing
+                        // This handles cases where agent responds with text but no audio event
+                        if (jsonData.role !== 'user') {
+                            setProcessing(false);
+                        }
+                        
+                        // Event triggers
+                        if (jsonData.event_type && jsonData.event_type.startsWith('agent')) {
                             setProcessing(false);
                         }
 
                         if (["user.speak_started", "user.speak_ended"].includes(jsonData.event_type)) return; 
 
+                        // Determine Speaker
                         let senderName = "AI Eddie"; 
                         if (jsonData.role === 'user' || jsonData.type === 'transcription' || jsonData.type === 'transcript') {
                             senderName = "User";
@@ -310,11 +317,14 @@
 
                         let messageText = jsonData.text || jsonData.message || jsonData.transcript;
                         if (messageText) {
-                            if (senderName === "AI Eddie") setProcessing(false);
                             appendToTranscript(senderName, messageText);
                         }
                     } catch(e) {
-                        if (strData && strData.length > 0) appendToTranscript("AI Eddie", strData);
+                        if (strData && strData.length > 0) {
+                             // Assuming any non-JSON data is a message from the agent
+                             setProcessing(false);
+                             appendToTranscript("AI Eddie", strData);
+                        }
                     }
                 });
 
@@ -339,12 +349,12 @@
             }
         }
 
-        // --- NEW: MONITOR AGENT VOLUME ---
-        // Turns off processing immediately if the agent makes a sound
+        // --- AGENT VOLUME MONITORING ---
         function startAgentAudioMonitoring(participant) {
             if (agentAudioInterval) clearInterval(agentAudioInterval);
             agentAudioInterval = setInterval(() => {
                 if (!participant) return;
+                // If agent audio level > 0, they are speaking. Reset processing.
                 if (participant.audioLevel > 0.01) {
                     setProcessing(false);
                 }
@@ -398,8 +408,8 @@
             if (event.key === "Enter") sendTextCommand();
         }
 
-        // --- FIX: SPEECH SIMULATION SEQUENCE ---
-        // Mimics a full voice interaction lifecycle to force VAD to accept text
+        // --- "SHOTGUN" COMMAND STRATEGY ---
+        // Sends 3 variations of the command to ensure one hits the Full Mode handler
         async function sendTextCommand() {
             const inputField = document.getElementById('textCommand');
             const text = inputField.value.trim();
@@ -417,34 +427,35 @@
                 const encoder = new TextEncoder();
                 const timestamp = Date.now();
 
-                // 1. SIGNAL: STARTED SPEAKING
-                const startPayload = JSON.stringify({ type: "user.started_speaking", timestamp: timestamp });
-                
-                // 2. CONTENT: TRANSCRIPTION (The Text)
-                const textPayload = JSON.stringify({
-                    type: "transcription",
-                    text: text,
-                    is_final: true,
-                    final: true,
-                    timestamp: timestamp + 50
+                // 1. "Speak" Command (Explicit Instruction)
+                // "Instructing it to speak a certain phrase" 
+                const payloadSpeak = JSON.stringify({
+                    type: "speak",
+                    text: text
                 });
 
-                // 3. SIGNAL: ENDED SPEAKING
-                const endPayload = JSON.stringify({ type: "user.ended_speaking", timestamp: timestamp + 100 });
+                // 2. Chat Payload (Standard Widget)
+                const payloadChat = JSON.stringify({
+                    message: text,
+                    timestamp: timestamp
+                });
 
-                // --- SEQUENCE SENDING ---
+                // 3. Conversation Input (LLM Injection)
+                const payloadInput = JSON.stringify({
+                    type: "conversation.input",
+                    text: text
+                });
+
+                // --- BROADCAST ---
                 
-                // Step A: Wake up VAD
-                await currentRoom.localParticipant.publishData(encoder.encode(startPayload), { reliable: true });
+                // A. Send 'speak' to default reliable channel (Primary Command)
+                await currentRoom.localParticipant.publishData(encoder.encode(payloadSpeak), { reliable: true });
 
-                // Step B: Send Text (on multiple topics to be safe)
-                await currentRoom.localParticipant.publishData(encoder.encode(textPayload), { reliable: true, topic: "transcription" });
-                
-                // Also send Raw Text fallback (some agents read this directly)
-                await currentRoom.localParticipant.publishData(encoder.encode(text), { reliable: true });
+                // B. Send 'chat' to 'lk-chat-topic' (Standard Frontend)
+                await currentRoom.localParticipant.publishData(encoder.encode(payloadChat), { reliable: true, topic: "lk-chat-topic" });
 
-                // Step C: Close VAD (Force Response)
-                await currentRoom.localParticipant.publishData(encoder.encode(endPayload), { reliable: true });
+                // C. Send 'conversation.input' to default (Backup Command)
+                await currentRoom.localParticipant.publishData(encoder.encode(payloadInput), { reliable: true });
 
                 inputField.value = "";
                 
