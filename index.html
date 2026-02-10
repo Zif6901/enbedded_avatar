@@ -163,12 +163,12 @@
         let currentRoom = null;
         let recognition = null; 
         
-        // VAD (Voice Activity) Variables
+        // VAD Variables
         let audioInterval = null;
         let isSpeaking = false;
         let silenceTimer = null;
         const SILENCE_THRESHOLD = 0.01; 
-        const SILENCE_DELAY_MS = 800;  // Reduced delay for snappier response
+        const SILENCE_DELAY_MS = 800;  
         
         const SNAPLOGIC_URL = "https://tpalpb1wva002.verizon.com:8888/api/1/rest/feed/run/task/VerizonEISDev/DeliveryAssurance/shared/Embedded_Agent_Token_Request%20Task_Gnd?bearer_token=8tn6rpItp0F8RIYNNGq2LECBvdi9is2X";
 
@@ -207,7 +207,6 @@
             a.click();
         }
 
-        // --- SPEECH RECOGNITION (Backup for Transcript Only) ---
         function initSpeechRecognition() {
             const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
             if (SpeechRecognition) {
@@ -260,11 +259,9 @@
             try {
                 currentRoom = new LivekitClient.Room({ adaptiveStream: true, dynacast: true });
 
-                // 1. VIDEO/AUDIO HANDLING (Agent Speaking)
+                // 1. VIDEO/AUDIO HANDLING
                 currentRoom.on(LivekitClient.RoomEvent.TrackSubscribed, (track) => {
                     document.getElementById('video-container').appendChild(track.attach());
-                    
-                    // IF AGENT SPEAKS -> STOP PROCESSING
                     if (track.kind === LivekitClient.Track.Kind.Audio) {
                          const element = track.attach();
                          element.onplay = () => setProcessing(false);
@@ -274,40 +271,25 @@
                 // 2. AGENT AUDIO ACTIVITY
                 currentRoom.on(LivekitClient.RoomEvent.ActiveSpeakersChanged, (speakers) => {
                     const agentSpeaking = speakers.some(s => !s.isLocal);
-                    if (agentSpeaking) {
-                        setProcessing(false);
-                    }
+                    if (agentSpeaking) setProcessing(false);
                 });
 
-                // 3. DATA HANDLING (Text Responses)
+                // 3. DATA HANDLING
                 currentRoom.on(LivekitClient.RoomEvent.DataReceived, (payload) => {
                     const decoder = new TextDecoder();
                     const strData = decoder.decode(payload);
-                    
                     try {
                         const jsonData = JSON.parse(strData);
+                        if (["user.speak_started", "user.speak_ended", "agent.thinking"].includes(jsonData.event_type)) return; 
                         
-                        // Ignore technical events
-                        if (["user.speak_started", "user.speak_ended", "agent.thinking"].includes(jsonData.event_type)) {
-                            return; 
-                        }
-
-                        // Ignore user echo
-                        const isUserEcho = (jsonData.role === 'user') || 
-                                         (jsonData.event_type === 'transcript') ||
-                                         (jsonData.type === 'transcript') || 
-                                         (jsonData.type === 'transcription');
-
+                        const isUserEcho = (jsonData.role === 'user') || (jsonData.type === 'transcript') || (jsonData.type === 'transcription');
                         if (isUserEcho) return; 
 
                         let messageText = jsonData.text || jsonData.message || jsonData.transcript;
-
                         if (messageText) {
-                            // Agent sent text -> STOP PROCESSING
                             setProcessing(false);
                             appendToTranscript("AI Eddie", messageText);
                         }
-
                     } catch(e) {
                         if (strData && strData.length > 0) {
                              setProcessing(false);
@@ -322,14 +304,10 @@
                 document.getElementById('micBtn').disabled = false;
                 document.getElementById('sendBtn').disabled = false;
 
-                // Auto-start Mic
                 try {
                     await currentRoom.localParticipant.setMicrophoneEnabled(true);
                     document.getElementById('micBtn').classList.add("active-mic");
-                    
-                    // START CUSTOM VAD MONITORING
                     startAudioMonitoring();
-                    
                     if (recognition) recognition.start();
                     updateStatus("Connected & Mic Live");
                 } catch(e) {
@@ -341,22 +319,19 @@
             }
         }
 
-        // --- CUSTOM VAD (Audio Level Monitoring) ---
-        // Uses raw audio levels for instant feedback
+        // --- CUSTOM VAD ---
         function startAudioMonitoring() {
             if (audioInterval) clearInterval(audioInterval);
             
             audioInterval = setInterval(() => {
                 if (!currentRoom || !currentRoom.localParticipant) return;
                 
-                // Audio level is 0 to 1
                 const audioLevel = currentRoom.localParticipant.audioLevel;
 
                 if (audioLevel > SILENCE_THRESHOLD) {
-                    // USER IS SPEAKING
+                    // USER SPEAKING
                     if (!isSpeaking) {
                         isSpeaking = true;
-                        // HIDE processing bar while speaking (waiting for end)
                         document.getElementById('processing-bar').style.display = 'none';
                         document.getElementById('processing-text').style.display = 'none';
                         updateStatus("Listening...");
@@ -365,12 +340,11 @@
                     silenceTimer = null;
                 
                 } else if (isSpeaking) {
-                    // USER STOPPED SPEAKING
+                    // USER STOPPED
                     if (!silenceTimer) {
                         silenceTimer = setTimeout(() => {
                             isSpeaking = false;
-                            // INSTANTLY SHOW PROCESSING BAR
-                            setProcessing(true);
+                            setProcessing(true); // START PROCESSING IMMEDIATELY
                         }, SILENCE_DELAY_MS);
                     }
                 }
@@ -387,12 +361,12 @@
             
             if (!isEnabled) {
                 btn.classList.add("active-mic");
-                startAudioMonitoring(); // Restart VAD
+                startAudioMonitoring(); 
                 if (recognition) try { recognition.start(); } catch(e){}
                 updateStatus("Mic Live");
             } else {
                 btn.classList.remove("active-mic");
-                if (audioInterval) clearInterval(audioInterval); // Stop VAD
+                if (audioInterval) clearInterval(audioInterval);
                 if (recognition) recognition.stop();
                 updateStatus("Mic Muted");
             }
@@ -402,7 +376,7 @@
             if (event.key === "Enter") sendTextCommand();
         }
 
-        // --- FIXED TEXT COMMAND SENDING (SPOOFING + MUTE) ---
+        // --- FIXED TEXT COMMAND SENDING (OpenAI Realtime Protocol) ---
         async function sendTextCommand() {
             const inputField = document.getElementById('textCommand');
             const text = inputField.value.trim();
@@ -411,11 +385,9 @@
             setProcessing(true); 
             appendToTranscript("User (Text)", text);
 
-            // 1. TEMPORARILY MUTE MIC
-            // This is critical. It prevents your breath/typing noise from overriding the text command.
+            // MUTE MIC
             const wasMicEnabled = currentRoom.localParticipant.isMicrophoneEnabled;
             if (wasMicEnabled) {
-                console.log("[Client] Muting mic to send text...");
                 await currentRoom.localParticipant.setMicrophoneEnabled(false);
             }
 
@@ -423,22 +395,37 @@
                 const encoder = new TextEncoder();
                 const timestamp = Date.now();
 
-                // 2. SEND SPOOFED SPEECH PAYLOAD
-                // We send a packet that looks *exactly* like a final speech result.
-                const spoofPayload = JSON.stringify({
-                    type: "transcription", // Standard LiveKit Agent trigger
-                    text: text,
-                    is_final: true,        // CRITICAL: Tells agent "User is done talking"
-                    confidence: 1.0,
-                    timestamp: timestamp
+                // --- 1. OPENAI REALTIME API FORMAT (Most likely for modern Avatars) ---
+                // We create a "Conversation Item" (User Message)
+                const openAiItemPayload = JSON.stringify({
+                    type: "conversation.item.create",
+                    item: {
+                        type: "message",
+                        role: "user",
+                        content: [ { type: "input_text", text: text } ]
+                    }
                 });
 
-                // Broadcast to 'transcription' topic (Standard for STT injection)
-                await currentRoom.localParticipant.publishData(encoder.encode(spoofPayload), { reliable: true, topic: "transcription" });
+                // We COMMAND the model to respond to that item
+                const openAiResponsePayload = JSON.stringify({
+                    type: "response.create"
+                });
 
-                // Also broadcast to 'chat' just in case
-                const chatPayload = JSON.stringify({ message: text, timestamp: timestamp });
-                await currentRoom.localParticipant.publishData(encoder.encode(chatPayload), { reliable: true, topic: "chat" });
+                // --- 2. FALLBACK FORMATS ---
+                const standardChat = JSON.stringify({ message: text, timestamp: timestamp });
+                const transcriptionSpoof = JSON.stringify({ type: "transcription", text: text, is_final: true, timestamp: timestamp });
+
+                // --- BROADCAST ---
+                
+                // A. Send OpenAI Protocol Events (Reliable)
+                await currentRoom.localParticipant.publishData(encoder.encode(openAiItemPayload), { reliable: true });
+                await currentRoom.localParticipant.publishData(encoder.encode(openAiResponsePayload), { reliable: true });
+
+                // B. Send Standard Chat (Reliable)
+                await currentRoom.localParticipant.publishData(encoder.encode(standardChat), { reliable: true, topic: "chat" });
+                
+                // C. Send Transcription Spoof (Reliable)
+                await currentRoom.localParticipant.publishData(encoder.encode(transcriptionSpoof), { reliable: true, topic: "transcription" });
 
                 inputField.value = "";
                 
@@ -447,14 +434,11 @@
                 setProcessing(false);
                 updateStatus("Send Failed");
             } finally {
-                // 3. UNMUTE MIC AFTER DELAY
-                // Wait 3 seconds to let the agent process the text without interference
                 if (wasMicEnabled) {
                     setTimeout(async () => {
                         try {
-                            console.log("[Client] Restoring mic...");
                             await currentRoom.localParticipant.setMicrophoneEnabled(true);
-                        } catch(e) { console.warn("Failed to restore mic"); }
+                        } catch(e) {}
                     }, 3000); 
                 }
             }
