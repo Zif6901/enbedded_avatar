@@ -254,26 +254,39 @@
             try {
                 currentRoom = new LivekitClient.Room({ adaptiveStream: true, dynacast: true });
 
+                // 1. VIDEO HANDLING
                 currentRoom.on(LivekitClient.RoomEvent.TrackSubscribed, (track) => {
                     document.getElementById('video-container').appendChild(track.attach());
+                    
+                    // If AUDIO track is subscribed (Agent speaking), turn OFF processing
+                    if (track.kind === LivekitClient.Track.Kind.Audio) {
+                        setProcessing(false);
+                    }
                 });
 
-                // --- DATA HANDLING (Responses) ---
-                currentRoom.on(LivekitClient.RoomEvent.DataReceived, (payload) => {
-                    setProcessing(false);
+                // 2. AUDIO ACTIVITY HANDLING
+                currentRoom.on(LivekitClient.RoomEvent.ActiveSpeakersChanged, (speakers) => {
+                    // Check if a remote participant (Agent) is speaking
+                    const agentSpeaking = speakers.some(s => !s.isLocal);
+                    if (agentSpeaking) {
+                        setProcessing(false); // Stop processing bar if agent talks
+                    }
+                });
 
+                // 3. DATA HANDLING (Text Responses)
+                currentRoom.on(LivekitClient.RoomEvent.DataReceived, (payload) => {
                     const decoder = new TextDecoder();
                     const strData = decoder.decode(payload);
                     
                     try {
                         const jsonData = JSON.parse(strData);
                         
-                        // Ignore technical events
+                        // Ignore technical events - DO NOT turn off processing for these
                         if (["user.speak_started", "user.speak_ended", "agent.thinking"].includes(jsonData.event_type)) {
-                            return;
+                            return; 
                         }
 
-                        // Ignore user echo (prevents "AI Eddie" labeling user text)
+                        // Ignore user echo
                         const isUserEcho = (jsonData.role === 'user') || 
                                          (jsonData.event_type === 'transcript') ||
                                          (jsonData.type === 'transcript') || 
@@ -284,11 +297,16 @@
                         let messageText = jsonData.text || jsonData.message || jsonData.transcript;
 
                         if (messageText) {
+                            // If we received actual text, we can stop the processing indicator
+                            setProcessing(false);
                             appendToTranscript("AI Eddie", messageText);
                         }
 
                     } catch(e) {
-                        if (strData && strData.length > 0) appendToTranscript("AI Eddie", strData);
+                        if (strData && strData.length > 0) {
+                             setProcessing(false);
+                             appendToTranscript("AI Eddie", strData);
+                        }
                     }
                 });
 
@@ -336,7 +354,7 @@
             if (event.key === "Enter") sendTextCommand();
         }
 
-        // --- UNIVERSAL TEXT COMMAND SENDER ---
+        // --- FIXED TEXT COMMAND SENDING ---
         async function sendTextCommand() {
             const inputField = document.getElementById('textCommand');
             const text = inputField.value.trim();
@@ -345,8 +363,6 @@
             setProcessing(true); 
             appendToTranscript("User (Text)", text);
 
-            // 1. VAD PROTECTION: Temporarily Mute Mic if it's on
-            // This prevents background noise from overriding the text command
             const wasMicEnabled = currentRoom.localParticipant.isMicrophoneEnabled;
             if (wasMicEnabled) {
                 await currentRoom.localParticipant.setMicrophoneEnabled(false);
@@ -355,31 +371,31 @@
             try {
                 const encoder = new TextEncoder();
                 
-                // Payload A: Standard LiveKit Chat (JSON with timestamp)
+                // LiveKit Standard Chat Format
                 const payloadStandard = JSON.stringify({
                     message: text,
                     timestamp: Date.now()
                 });
                 
-                // Payload B: Simple JSON (Common for custom agents)
+                // Simple Format
                 const payloadSimple = JSON.stringify({
                     text: text,
                     type: "chat"
                 });
 
-                // Payload C: Raw Text
-                const payloadRaw = text;
-
-                // --- BROADCAST ON ALL COMMON CHANNELS ---
+                // 1. Send to 'lk.chat' (Standard LiveKit Agent Topic)
+                await currentRoom.localParticipant.publishData(encoder.encode(payloadSimple), { reliable: true, topic: "lk.chat" });
                 
-                // 1. Send to 'lk-chat-topic' (Standard Frontend UI topic)
-                await currentRoom.localParticipant.publishData(encoder.encode(payloadStandard), { reliable: true, topic: "lk-chat-topic" });
-                
-                // 2. Send to 'chat' (Standard Backend topic) - Send Simple JSON
+                // 2. Send to 'chat' (Legacy/Alternative Topic)
                 await currentRoom.localParticipant.publishData(encoder.encode(payloadSimple), { reliable: true, topic: "chat" });
 
-                // 3. Send to 'chat' - Send Raw Text (Fallback for simple agents)
-                await currentRoom.localParticipant.publishData(encoder.encode(payloadRaw), { reliable: true, topic: "chat" });
+                // 3. Send to 'transcription' (Spoofing speech if chat fails)
+                 const payloadTranscript = JSON.stringify({
+                    text: text,
+                    is_final: true,
+                    type: "transcription"
+                });
+                await currentRoom.localParticipant.publishData(encoder.encode(payloadTranscript), { reliable: true, topic: "transcription" });
 
                 inputField.value = "";
                 
@@ -388,13 +404,12 @@
                 setProcessing(false);
                 updateStatus("Send Failed");
             } finally {
-                // Restore Mic State after a short delay to allow server to process text
                 if (wasMicEnabled) {
                     setTimeout(async () => {
                         try {
                             await currentRoom.localParticipant.setMicrophoneEnabled(true);
                         } catch(e) { console.warn("Failed to restore mic"); }
-                    }, 500); // 500ms delay
+                    }, 500); 
                 }
             }
         }
