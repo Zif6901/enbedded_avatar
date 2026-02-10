@@ -140,7 +140,7 @@
 
     <script>
         let currentRoom = null;
-        let recognition = null; // Local speech recognition instance
+        let recognition = null; 
         
         const SNAPLOGIC_URL = "https://tpalpb1wva002.verizon.com:8888/api/1/rest/feed/run/task/VerizonEISDev/DeliveryAssurance/shared/Embedded_Agent_Token_Request%20Task_Gnd?bearer_token=8tn6rpItp0F8RIYNNGq2LECBvdi9is2X";
 
@@ -268,7 +268,7 @@
                     document.getElementById('video-container').appendChild(element);
                 });
 
-                // Data Handling
+                // Data Handling (Agent Responses)
                 currentRoom.on(LivekitClient.RoomEvent.DataReceived, (payload, participant) => {
                     const decoder = new TextDecoder();
                     const strData = decoder.decode(payload);
@@ -383,10 +383,22 @@
             // 2. Send to LiveKit Data Channel
             try {
                 const encoder = new TextEncoder();
-                const data = encoder.encode(text);
                 
-                // Publish data to the room (reliable=true for text commands)
-                await currentRoom.localParticipant.publishData(data, { reliable: true });
+                // FIX: Send JSON object instead of raw text
+                const jsonPayload = JSON.stringify({
+                    type: "chat",
+                    text: text,
+                    message: text,
+                    timestamp: Date.now()
+                });
+
+                const data = encoder.encode(jsonPayload);
+                
+                // Publish data to the room
+                await currentRoom.localParticipant.publishData(data, { 
+                    reliable: true,
+                    topic: "chat" 
+                });
                 
                 // Clear input
                 inputField.value = "";
