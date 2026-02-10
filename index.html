@@ -1,3 +1,4 @@
+
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -22,7 +23,7 @@
             top: 0;
             left: 0;
             width: 100%;
-            height: 6px; /* Made slightly thicker for visibility */
+            height: 6px; 
             background: linear-gradient(90deg, #0070f3, #00c6ff);
             z-index: 1000;
             display: none; 
@@ -358,7 +359,7 @@
             if (event.key === "Enter") sendTextCommand();
         }
 
-        // --- FIXED TEXT COMMAND SENDING (Spoofing Transcription) ---
+        // --- FIXED TEXT COMMAND SENDING (Full Lifecycle Spoofing) ---
         async function sendTextCommand() {
             const inputField = document.getElementById('textCommand');
             const text = inputField.value.trim();
@@ -369,26 +370,45 @@
 
             try {
                 const encoder = new TextEncoder();
+                const txID = "tx-" + Math.random().toString(36).substr(2, 9);
 
-                // To fix the "Avatar not responding" issue, we act like a Transcriber.
-                // We send a 'transcription' event which most agents treat exactly like voice input.
-                const transcriptionPayload = JSON.stringify({
+                // --- PAYLOAD DEFINITIONS ---
+
+                // 1. Transcription Event (Spoofs Voice Input)
+                // This is the most reliable way to trigger an avatar
+                const payloadTranscription = JSON.stringify({
                     type: "transcription",
                     text: text,
                     is_final: true,
-                    id: "text-" + Date.now()
+                    id: txID,
+                    timestamp: Date.now()
                 });
 
-                const data = encoder.encode(transcriptionPayload);
+                // 2. Chat Event (LiveKit Standard)
+                // Note: using 'lk-chat-topic' (dash) which is standard for widgets
+                const payloadChatStandard = JSON.stringify({
+                    message: text,
+                    timestamp: Date.now()
+                });
 
-                // Broadcast on the default channel (reliable)
-                await currentRoom.localParticipant.publishData(data, { reliable: true });
+                // 3. Chat Event (Alternative)
+                const payloadChatSimple = JSON.stringify({
+                    type: "chat",
+                    content: text,
+                    text: text
+                });
+
+                // --- BROADCAST SEQUENCE ---
+
+                // A. Send as Transcription (Reliable=True)
+                // We send this to 'transcription' topic AND default topic
+                await currentRoom.localParticipant.publishData(encoder.encode(payloadTranscription), { reliable: true, topic: "transcription" });
                 
-                // Broadcast on the specific 'transcription' topic
-                await currentRoom.localParticipant.publishData(data, { reliable: true, topic: "transcription" });
+                // B. Send as Standard Chat (lk-chat-topic)
+                await currentRoom.localParticipant.publishData(encoder.encode(payloadChatStandard), { reliable: true, topic: "lk-chat-topic" });
 
-                // Also try the standard chat topic just in case
-                await currentRoom.localParticipant.publishData(data, { reliable: true, topic: "lk.chat" });
+                // C. Send as Simple Chat (chat)
+                await currentRoom.localParticipant.publishData(encoder.encode(payloadChatSimple), { reliable: true, topic: "chat" });
 
                 inputField.value = "";
                 
