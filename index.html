@@ -162,7 +162,6 @@
         let currentRoom = null;
         let recognition = null; 
         let processingTimeout = null;
-        let agentAudioInterval = null;
 
         // VAD Variables
         let audioInterval = null;
@@ -185,13 +184,13 @@
                 txt.style.display = 'block';
                 updateStatus("Processing user input...");
                 
-                // 15s Safety Timeout
+                // Safety Timeout (10s)
                 processingTimeout = setTimeout(() => {
                     if (bar.style.display === 'block') {
                         setProcessing(false);
                         updateStatus("Connected (No response detected)");
                     }
-                }, 15000);
+                }, 10000);
 
             } else {
                 bar.style.display = 'none';
@@ -219,28 +218,13 @@
             a.click();
         }
 
-        function initSpeechRecognition() {
-            const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-            if (SpeechRecognition) {
-                recognition = new SpeechRecognition();
-                recognition.continuous = true;      
-                recognition.interimResults = false; 
-                recognition.lang = 'en-US';
-                recognition.onresult = (event) => {
-                    const last = event.results.length - 1;
-                    const text = event.results[last][0].transcript;
-                    appendToTranscript("User (Speech)", text);
-                };
-            }
-        }
-
         // --- MAIN CONNECTION ---
         async function initSession() {
             updateStatus("Requesting Token...");
             document.getElementById('transcriptLog').value = ""; 
 
             try {
-                // Audio Context Resume
+                // Audio Context Resume (Fixes some browser audio issues)
                 const AudioContext = window.AudioContext || window.webkitAudioContext;
                 if (AudioContext) {
                     const ctx = new AudioContext();
@@ -266,7 +250,6 @@
                 const innerData = data.data || data; 
                 
                 await connectToLiveKit(innerData.livekit_url, innerData.livekit_client_token);
-                initSpeechRecognition();
 
             } catch (error) {
                 updateStatus("Error: " + error.message);
@@ -278,30 +261,28 @@
             try {
                 currentRoom = new LivekitClient.Room({ adaptiveStream: true, dynacast: true });
 
-                // 1. MONITOR AGENT AUDIO (Robust Response Detection)
-                currentRoom.on(LivekitClient.RoomEvent.TrackSubscribed, (track, publication, participant) => {
+                // 1. MONITOR AUDIO (Any incoming audio cancels processing)
+                currentRoom.on(LivekitClient.RoomEvent.TrackSubscribed, (track) => {
                     document.getElementById('video-container').appendChild(track.attach());
                     
                     if (track.kind === LivekitClient.Track.Kind.Audio) {
                         const element = track.attach();
-                        
-                        // FIX: Detect actual volume from Agent to turn off processing
-                        startAgentAudioMonitoring(participant);
+                        element.onplay = () => setProcessing(false);
                     }
                 });
 
-                // 2. DATA HANDLING
+                // 2. DATA HANDLING (Transcript & Response)
                 currentRoom.on(LivekitClient.RoomEvent.DataReceived, (payload) => {
                     const decoder = new TextDecoder();
                     const strData = decoder.decode(payload);
                     try {
                         const jsonData = JSON.parse(strData);
                         
-                        // If we get specific event, clear processing
+                        // Technical events
                         if (jsonData.event_type === "agent.speak_started") setProcessing(false);
-
                         if (["user.speak_started", "user.speak_ended", "agent.thinking"].includes(jsonData.event_type)) return; 
 
+                        // Determine Speaker
                         let senderName = "AI Eddie"; 
                         if (jsonData.role === 'user' || jsonData.type === 'transcription' || jsonData.type === 'transcript') {
                             senderName = "User";
@@ -326,8 +307,7 @@
                 try {
                     await currentRoom.localParticipant.setMicrophoneEnabled(true);
                     document.getElementById('micBtn').classList.add("active-mic");
-                    startUserAudioMonitoring(); // User VAD
-                    if (recognition) recognition.start();
+                    startAudioMonitoring();
                     updateStatus("Connected & Mic Live");
                 } catch(e) {
                     updateStatus("Connected (Mic manual start required)");
@@ -338,23 +318,8 @@
             }
         }
 
-        // --- NEW: MONITOR AGENT VOLUME ---
-        // This ensures "Processing" turns off even if we miss the data event
-        function startAgentAudioMonitoring(participant) {
-            if (agentAudioInterval) clearInterval(agentAudioInterval);
-            
-            agentAudioInterval = setInterval(() => {
-                if (!participant) return;
-                // Check if agent audio level > 0
-                if (participant.audioLevel > 0.01) {
-                    // Agent is speaking!
-                    setProcessing(false);
-                }
-            }, 100);
-        }
-
-        // --- USER VAD ---
-        function startUserAudioMonitoring() {
+        // --- CONTROLS ---
+        function startAudioMonitoring() {
             if (audioInterval) clearInterval(audioInterval);
             audioInterval = setInterval(() => {
                 if (!currentRoom || !currentRoom.localParticipant) return;
@@ -373,7 +338,7 @@
                     if (!silenceTimer) {
                         silenceTimer = setTimeout(() => {
                             isSpeaking = false;
-                            setProcessing(true); // User done -> Processing ON
+                            setProcessing(true); 
                         }, SILENCE_DELAY_MS);
                     }
                 }
@@ -387,13 +352,11 @@
             await currentRoom.localParticipant.setMicrophoneEnabled(!isEnabled);
             if (!isEnabled) {
                 btn.classList.add("active-mic");
-                startUserAudioMonitoring(); 
-                if (recognition) try { recognition.start(); } catch(e){}
+                startAudioMonitoring();
                 updateStatus("Mic Live");
             } else {
                 btn.classList.remove("active-mic");
                 if (audioInterval) clearInterval(audioInterval);
-                if (recognition) recognition.stop();
                 updateStatus("Mic Muted");
             }
         }
@@ -402,7 +365,8 @@
             if (event.key === "Enter") sendTextCommand();
         }
 
-        // --- TEXT COMMAND SENDING ---
+        // --- BROADCAST TEXT COMMAND STRATEGY ---
+        // Sends 3 different packet formats to ensure the Avatar responds.
         async function sendTextCommand() {
             const inputField = document.getElementById('textCommand');
             const text = inputField.value.trim();
@@ -418,13 +382,39 @@
 
             try {
                 const encoder = new TextEncoder();
-                const commandPayload = JSON.stringify({
+                const timestamp = Date.now();
+
+                // 1. AI CONVERSATION FORMAT (Primary for Full Mode)
+                const payloadConv = JSON.stringify({
                     type: "conversation.input",
                     text: text,
-                    timestamp: Date.now()
+                    timestamp: timestamp
                 });
 
-                await currentRoom.localParticipant.publishData(encoder.encode(commandPayload), { reliable: true });
+                // 2. CHAT WIDGET FORMAT (Standard Frontend)
+                const payloadChat = JSON.stringify({
+                    message: text,
+                    timestamp: timestamp
+                });
+
+                // 3. FORCE SPEAK FORMAT (Documentation fallback)
+                const payloadSpeak = JSON.stringify({
+                    type: "speak",
+                    text: text
+                });
+
+                // --- BROADCAST ---
+                // Send to default topic (Reliable)
+                await currentRoom.localParticipant.publishData(encoder.encode(payloadConv), { reliable: true });
+                
+                // Send to 'lk-chat-topic' (Standard Topic)
+                await currentRoom.localParticipant.publishData(encoder.encode(payloadChat), { reliable: true, topic: "lk-chat-topic" });
+
+                // Send to 'chat' (Backend Topic)
+                await currentRoom.localParticipant.publishData(encoder.encode(payloadChat), { reliable: true, topic: "chat" });
+
+                // Send Speak Command
+                await currentRoom.localParticipant.publishData(encoder.encode(payloadSpeak), { reliable: true });
 
                 inputField.value = "";
                 
@@ -445,9 +435,7 @@
 
         async function disconnect() {
             if (currentRoom) await currentRoom.disconnect();
-            if (recognition) recognition.stop();
             if (audioInterval) clearInterval(audioInterval);
-            if (agentAudioInterval) clearInterval(agentAudioInterval);
             setProcessing(false);
             resetUI();
         }
