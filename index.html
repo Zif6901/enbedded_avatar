@@ -16,6 +16,7 @@
         }
         h1 { margin-bottom: 20px; color: #333; }
         
+        /* PROCESSING INDICATOR */
         #processing-bar {
             position: fixed;
             top: 0;
@@ -167,7 +168,7 @@
         let isSpeaking = false;
         let silenceTimer = null;
         const SILENCE_THRESHOLD = 0.01; 
-        const SILENCE_DELAY_MS = 600;  
+        const SILENCE_DELAY_MS = 800;  
         
         const SNAPLOGIC_URL = "https://tpalpb1wva002.verizon.com:8888/api/1/rest/feed/run/task/VerizonEISDev/DeliveryAssurance/shared/Embedded_Agent_Token_Request%20Task_Gnd?bearer_token=8tn6rpItp0F8RIYNNGq2LECBvdi9is2X";
 
@@ -188,6 +189,7 @@
 
         function appendToTranscript(sender, text) {
             if (!text || text.trim() === "") return; 
+
             const log = document.getElementById('transcriptLog');
             const timestamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
             log.value += `[${timestamp}] ${sender}: ${text}\n`;
@@ -205,6 +207,7 @@
             a.click();
         }
 
+        // --- SPEECH RECOGNITION (Local Backup) ---
         function initSpeechRecognition() {
             const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
             if (SpeechRecognition) {
@@ -212,6 +215,7 @@
                 recognition.continuous = true;      
                 recognition.interimResults = false; 
                 recognition.lang = 'en-US';
+
                 recognition.onresult = (event) => {
                     const last = event.results.length - 1;
                     const text = event.results[last][0].transcript;
@@ -224,6 +228,7 @@
         async function initSession() {
             updateStatus("Requesting Token...");
             document.getElementById('transcriptLog').value = ""; 
+
             try {
                 const slResponse = await fetch(SNAPLOGIC_URL);
                 if (!slResponse.ok) throw new Error("SnapLogic Error: " + slResponse.status);
@@ -232,6 +237,7 @@
                 if (!sessionToken) throw new Error("No session token.");
 
                 updateStatus("Token received. Calling Avatar API...");
+
                 const response = await fetch('https://api.liveavatar.com/v1/sessions/start', {
                     method: 'POST',
                     headers: { 'Authorization': 'Bearer ' + sessionToken, 'Accept': 'application/json' }
@@ -243,6 +249,7 @@
                 
                 await connectToLiveKit(innerData.livekit_url, innerData.livekit_client_token);
                 initSpeechRecognition();
+
             } catch (error) {
                 updateStatus("Error: " + error.message);
             }
@@ -253,16 +260,18 @@
             try {
                 currentRoom = new LivekitClient.Room({ adaptiveStream: true, dynacast: true });
 
-                // 1. VIDEO/AUDIO HANDLING
+                // 1. VIDEO/AUDIO HANDLING (Agent Speaking)
                 currentRoom.on(LivekitClient.RoomEvent.TrackSubscribed, (track) => {
                     document.getElementById('video-container').appendChild(track.attach());
+                    
+                    // When agent audio starts playing, hide "Processing"
                     if (track.kind === LivekitClient.Track.Kind.Audio) {
                          const element = track.attach();
                          element.onplay = () => setProcessing(false);
                     }
                 });
 
-                // 2. AGENT ACTIVITY
+                // 2. AGENT AUDIO ACTIVITY
                 currentRoom.on(LivekitClient.RoomEvent.ActiveSpeakersChanged, (speakers) => {
                     const agentSpeaking = speakers.some(s => !s.isLocal);
                     if (agentSpeaking) setProcessing(false);
@@ -272,23 +281,36 @@
                 currentRoom.on(LivekitClient.RoomEvent.DataReceived, (payload) => {
                     const decoder = new TextDecoder();
                     const strData = decoder.decode(payload);
+                    
                     try {
                         const jsonData = JSON.parse(strData);
-                        if (["user.speak_started", "user.speak_ended", "agent.thinking"].includes(jsonData.event_type)) return; 
                         
-                        // Fix Attribution
+                        // Ignore technical status events
+                        if (["user.speak_started", "user.speak_ended", "agent.thinking"].includes(jsonData.event_type)) {
+                            return; 
+                        }
+
+                        // Determine the Speaker based on the event payload
                         let senderName = "AI Eddie"; 
+                        
+                        // FIX: Check if this is a transcript of the USER
+                        // We check specific fields that LiveAvatar echoes back for user input
                         if (jsonData.role === 'user' || jsonData.type === 'transcription' || jsonData.type === 'transcript') {
                             senderName = "User";
                         }
 
                         let messageText = jsonData.text || jsonData.message || jsonData.transcript;
+                        
                         if (messageText) {
-                            if (senderName === "AI Eddie") setProcessing(false);
+                            if (senderName === "AI Eddie") {
+                                setProcessing(false);
+                            }
                             appendToTranscript(senderName, messageText);
                         }
                     } catch(e) {
-                        if (strData && strData.length > 0) appendToTranscript("AI Eddie", strData);
+                        if (strData && strData.length > 0) {
+                             appendToTranscript("AI Eddie", strData);
+                        }
                     }
                 });
 
@@ -298,6 +320,7 @@
                 document.getElementById('micBtn').disabled = false;
                 document.getElementById('sendBtn').disabled = false;
 
+                // Auto-start Mic & VAD
                 try {
                     await currentRoom.localParticipant.setMicrophoneEnabled(true);
                     document.getElementById('micBtn').classList.add("active-mic");
@@ -313,12 +336,15 @@
             }
         }
 
-        // --- CUSTOM VAD ---
+        // --- CUSTOM VAD (Voice Activity Detection) ---
         function startAudioMonitoring() {
             if (audioInterval) clearInterval(audioInterval);
+            
             audioInterval = setInterval(() => {
                 if (!currentRoom || !currentRoom.localParticipant) return;
+                
                 const audioLevel = currentRoom.localParticipant.audioLevel;
+
                 if (audioLevel > SILENCE_THRESHOLD) {
                     if (!isSpeaking) {
                         isSpeaking = true;
@@ -328,6 +354,7 @@
                     }
                     if (silenceTimer) clearTimeout(silenceTimer);
                     silenceTimer = null;
+                
                 } else if (isSpeaking) {
                     if (!silenceTimer) {
                         silenceTimer = setTimeout(() => {
@@ -339,11 +366,14 @@
             }, 50); 
         }
 
+        // --- CONTROLS ---
         async function toggleMic() {
             if (!currentRoom) return;
             const btn = document.getElementById('micBtn');
             const isEnabled = currentRoom.localParticipant.isMicrophoneEnabled;
+
             await currentRoom.localParticipant.setMicrophoneEnabled(!isEnabled);
+            
             if (!isEnabled) {
                 btn.classList.add("active-mic");
                 startAudioMonitoring(); 
@@ -361,7 +391,8 @@
             if (event.key === "Enter") sendTextCommand();
         }
 
-        // --- UPDATED SEND FUNCTION (WAKE NOISE + COMMAND) ---
+        // --- FIXED: RELIABLE TEXT COMMAND SENDING ---
+        // Removed audio injection. Now sends standard LiveKit chat events.
         async function sendTextCommand() {
             const inputField = document.getElementById('textCommand');
             const text = inputField.value.trim();
@@ -369,77 +400,44 @@
 
             setProcessing(true); 
             appendToTranscript("User (Text)", text);
-            inputField.value = "";
 
             try {
-                // 1. Send the TEXT COMMAND (Data Channel)
-                [cite_start]// This covers FULL mode requirements [cite: 34]
                 const encoder = new TextEncoder();
+                const timestamp = Date.now();
+
+                // 1. STANDARD CHAT PAYLOAD (Compatible with most LiveKit Agents)
+                // This payload mimics the standard LiveKit Chat Component
+                const chatPayload = JSON.stringify({
+                    message: text,
+                    timestamp: timestamp
+                });
+
+                // 2. COMMAND PAYLOAD (Compatible with Full Mode APIs)
                 const commandPayload = JSON.stringify({
-                    type: "conversation.input", // Standard command
+                    type: "conversation.input",
                     text: text,
-                    timestamp: Date.now()
+                    timestamp: timestamp
                 });
+
+                // --- BROADCAST TO ALL TOPICS ---
+                // We send to all common topics to ensure the agent receives it.
                 
-                const speakPayload = JSON.stringify({
-                    type: "speak", // Alternate command
-                    text: text
-                });
+                // Topic A: 'lk-chat-topic' (Standard Frontend Chat)
+                await currentRoom.localParticipant.publishData(encoder.encode(chatPayload), { reliable: true, topic: "lk-chat-topic" });
 
-                // Broadcast commands
+                // Topic B: 'chat' (Standard Backend Chat)
+                await currentRoom.localParticipant.publishData(encoder.encode(chatPayload), { reliable: true, topic: "chat" });
+
+                // Topic C: Default (Command Event)
                 await currentRoom.localParticipant.publishData(encoder.encode(commandPayload), { reliable: true });
-                await currentRoom.localParticipant.publishData(encoder.encode(speakPayload), { reliable: true });
 
-
-                // 2. INJECT WAKE NOISE (Audio Channel)
-                // This forces the VAD to wake up, ensuring the avatar checks for the text command.
-                updateStatus("Waking Avatar...");
-                await injectWakeNoise();
-                updateStatus("Command Sent");
-
+                inputField.value = "";
+                
             } catch (e) {
                 console.error("Send Error:", e);
                 setProcessing(false);
                 updateStatus("Send Failed");
             }
-        }
-
-        // --- WAKE NOISE GENERATOR ---
-        // Generates 0.5s of low-volume noise to trigger VAD
-        async function injectWakeNoise() {
-            const audioContext = new (window.AudioContext || window.webkitAudioContext)();
-            const destination = audioContext.createMediaStreamDestination();
-            
-            // Create Noise Buffer
-            const bufferSize = audioContext.sampleRate * 0.5; // 0.5 seconds
-            const buffer = audioContext.createBuffer(1, bufferSize, audioContext.sampleRate);
-            const data = buffer.getChannelData(0);
-            
-            // Fill with low-volume random noise
-            for (let i = 0; i < bufferSize; i++) {
-                data[i] = (Math.random() * 2 - 1) * 0.01; // 1% volume
-            }
-
-            const source = audioContext.createBufferSource();
-            source.buffer = buffer;
-            source.connect(destination);
-
-            // Publish to LiveKit
-            const track = destination.stream.getAudioTracks()[0];
-            const sender = await currentRoom.localParticipant.publishTrack(track, {
-                name: "wake-noise",
-                source: LivekitClient.Track.Source.Microphone
-            });
-
-            // Play & Cleanup
-            source.start();
-            return new Promise((resolve) => {
-                source.onended = async () => {
-                    await currentRoom.localParticipant.unpublishTrack(track);
-                    audioContext.close();
-                    resolve();
-                };
-            });
         }
 
         async function disconnect() {
