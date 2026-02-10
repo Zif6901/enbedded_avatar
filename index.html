@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Device Showcase Virtual Coworker (Mirror Fix)</title>
+    <title>Device Showcase Virtual Coworker (RPC Fix)</title>
     <script src="https://cdn.jsdelivr.net/npm/livekit-client/dist/livekit-client.umd.min.js"></script>
     <style>
         body { 
@@ -341,7 +341,7 @@
             if (event.key === "Enter") sendTextCommand();
         }
 
-        // --- MIRROR STRATEGY ---
+        // --- RPC FIX STRATEGY ---
         async function sendTextCommand() {
             const inputField = document.getElementById('textCommand');
             const text = inputField.value.trim();
@@ -350,9 +350,7 @@
             setProcessing(true); 
             logToConsole(`[USER-INPUT] Sending: "${text}"`);
 
-            if (!currentSessionId) {
-                logToConsole("[WARN] No Session ID! Command will likely fail.");
-            }
+            if (!currentSessionId) logToConsole("[WARN] No Session ID! Command may fail.");
             
             const wasMicEnabled = currentRoom.localParticipant.isMicrophoneEnabled;
             if (wasMicEnabled) await currentRoom.localParticipant.setMicrophoneEnabled(false);
@@ -362,46 +360,43 @@
                 const timestamp = Date.now();
                 const uuid = crypto.randomUUID();
 
-                // MIRROR: EXACTLY what the server sent in your success log
-                // Topic: agent-response (server sent here, so we send to agent-input)
+                // 1. SIGNAL: START SPEAKING
                 const payloadStart = JSON.stringify({ 
                     event_type: "user.speak_started", 
                     timestamp: timestamp,
-                    session_id: currentSessionId,
-                    event_id: crypto.randomUUID()
+                    session_id: currentSessionId
                 });
 
+                // 2. SIGNAL: END SPEAKING
+                const payloadEnd = JSON.stringify({ 
+                    event_type: "user.speak_ended", 
+                    timestamp: timestamp + 50,
+                    session_id: currentSessionId
+                });
+
+                // 3. CONTENT: TRANSCRIPTION
                 const payloadTrans = JSON.stringify({ 
                     event_type: "user.transcription", 
                     text: text,
                     is_final: true,
-                    timestamp: timestamp + 50,
+                    timestamp: timestamp + 100,
                     session_id: currentSessionId,
                     event_id: uuid
                 });
 
-                const payloadEnd = JSON.stringify({ 
-                    event_type: "user.speak_ended", 
-                    timestamp: timestamp + 100,
-                    session_id: currentSessionId,
-                    event_id: crypto.randomUUID()
-                });
-
-                // TARGET TOPICS
-                // We spray the valid payload to the 3 most likely inputs
-                const topics = ["agent-input", "user-input", "transcription"];
+                // TARGET TOPICS: The most likely inputs for "agent-response"
+                const topics = ["agent-request", "", "chat/input"]; // "" = empty string topic
 
                 for (const topic of topics) {
-                     // 1. Start
-                     await currentRoom.localParticipant.publishData(encoder.encode(payloadStart), { reliable: true, topic: topic });
+                     // We publish to the topic. If topic is "", LiveKit treats it as default.
+                     const options = { reliable: true };
+                     if (topic !== "") options.topic = topic;
+
+                     await currentRoom.localParticipant.publishData(encoder.encode(payloadStart), options);
+                     await currentRoom.localParticipant.publishData(encoder.encode(payloadTrans), options);
+                     await currentRoom.localParticipant.publishData(encoder.encode(payloadEnd), options);
                      
-                     // 2. Transcribe
-                     await currentRoom.localParticipant.publishData(encoder.encode(payloadTrans), { reliable: true, topic: topic });
-                     
-                     // 3. End
-                     await currentRoom.localParticipant.publishData(encoder.encode(payloadEnd), { reliable: true, topic: topic });
-                     
-                     logToConsole(`[SENT] VAD Sequence to '${topic}'`);
+                     logToConsole(`[SENT] VAD Sequence to '${topic || "default"}'`);
                 }
 
                 inputField.value = "";
