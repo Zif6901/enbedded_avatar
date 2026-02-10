@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Device Showcase Virtual Coworker (RPC Fix)</title>
+    <title>Device Showcase Virtual Coworker (Paced Hybrid Fix)</title>
     <script src="https://cdn.jsdelivr.net/npm/livekit-client/dist/livekit-client.umd.min.js"></script>
     <style>
         body { 
@@ -250,7 +250,6 @@
             try {
                 currentRoom = new LivekitClient.Room({ adaptiveStream: true, dynacast: true });
 
-                // 1. MONITOR AGENT AUDIO
                 currentRoom.on(LivekitClient.RoomEvent.TrackSubscribed, (track, publication, participant) => {
                     document.getElementById('video-container').appendChild(track.attach());
                     logToConsole(`[ROOM] Track Subscribed: ${track.kind}`);
@@ -264,7 +263,6 @@
                     }
                 });
 
-                // 2. DATA HANDLING
                 currentRoom.on(LivekitClient.RoomEvent.DataReceived, (payload, participant, kind, topic) => {
                     const decoder = new TextDecoder();
                     const strData = decoder.decode(payload);
@@ -341,7 +339,8 @@
             if (event.key === "Enter") sendTextCommand();
         }
 
-        // --- RPC FIX STRATEGY ---
+        // --- PACED HYBRID SEND STRATEGY ---
+        // Sends both a Command and a Simulated Voice Sequence with human-like delays
         async function sendTextCommand() {
             const inputField = document.getElementById('textCommand');
             const text = inputField.value.trim();
@@ -352,6 +351,7 @@
 
             if (!currentSessionId) logToConsole("[WARN] No Session ID! Command may fail.");
             
+            // 1. Mute Mic
             const wasMicEnabled = currentRoom.localParticipant.isMicrophoneEnabled;
             if (wasMicEnabled) await currentRoom.localParticipant.setMicrophoneEnabled(false);
 
@@ -360,44 +360,41 @@
                 const timestamp = Date.now();
                 const uuid = crypto.randomUUID();
 
-                // 1. SIGNAL: START SPEAKING
-                const payloadStart = JSON.stringify({ 
-                    event_type: "user.speak_started", 
-                    timestamp: timestamp,
-                    session_id: currentSessionId
-                });
-
-                // 2. SIGNAL: END SPEAKING
-                const payloadEnd = JSON.stringify({ 
-                    event_type: "user.speak_ended", 
-                    timestamp: timestamp + 50,
-                    session_id: currentSessionId
-                });
-
-                // 3. CONTENT: TRANSCRIPTION
-                const payloadTrans = JSON.stringify({ 
-                    event_type: "user.transcription", 
+                // PAYLOAD A: DIRECT COMMAND (Type 1)
+                const payloadCommand = JSON.stringify({ 
+                    type: "conversation.input", 
                     text: text,
-                    is_final: true,
-                    timestamp: timestamp + 100,
-                    session_id: currentSessionId,
-                    event_id: uuid
+                    session_id: currentSessionId
                 });
 
-                // TARGET TOPICS: The most likely inputs for "agent-response"
-                const topics = ["agent-request", "", "chat/input"]; // "" = empty string topic
+                // PAYLOAD B: VOICE SEQUENCE (Type 2)
+                const payloadStart = JSON.stringify({ event_type: "user.speak_started", timestamp: Date.now(), session_id: currentSessionId });
+                const payloadTrans = JSON.stringify({ event_type: "user.transcription", text: text, is_final: true, timestamp: Date.now()+100, session_id: currentSessionId, event_id: uuid });
+                const payloadEnd = JSON.stringify({ event_type: "user.speak_ended", timestamp: Date.now()+500, session_id: currentSessionId });
 
-                for (const topic of topics) {
-                     // We publish to the topic. If topic is "", LiveKit treats it as default.
-                     const options = { reliable: true };
-                     if (topic !== "") options.topic = topic;
+                // --- EXECUTE PACED SEQUENCE ---
+                
+                // 1. Send Direct Command First (Fast Path)
+                await currentRoom.localParticipant.publishData(encoder.encode(payloadCommand), { reliable: true });
+                logToConsole(`[SENT] Command: conversation.input`);
 
-                     await currentRoom.localParticipant.publishData(encoder.encode(payloadStart), options);
-                     await currentRoom.localParticipant.publishData(encoder.encode(payloadTrans), options);
-                     await currentRoom.localParticipant.publishData(encoder.encode(payloadEnd), options);
-                     
-                     logToConsole(`[SENT] VAD Sequence to '${topic || "default"}'`);
-                }
+                await new Promise(r => setTimeout(r, 200)); // Small delay
+
+                // 2. Simulate VAD Open
+                await currentRoom.localParticipant.publishData(encoder.encode(payloadStart), { reliable: true });
+                logToConsole(`[SENT] Seq: user.speak_started`);
+
+                await new Promise(r => setTimeout(r, 300)); // Human reaction delay
+
+                // 3. Simulate Transcription
+                await currentRoom.localParticipant.publishData(encoder.encode(payloadTrans), { reliable: true });
+                logToConsole(`[SENT] Seq: user.transcription ("${text}")`);
+
+                await new Promise(r => setTimeout(r, 300)); // Processing delay
+
+                // 4. Simulate VAD Close (This triggers response)
+                await currentRoom.localParticipant.publishData(encoder.encode(payloadEnd), { reliable: true });
+                logToConsole(`[SENT] Seq: user.speak_ended`);
 
                 inputField.value = "";
                 
@@ -408,7 +405,7 @@
                 if (wasMicEnabled) {
                     setTimeout(async () => {
                         try { await currentRoom.localParticipant.setMicrophoneEnabled(true); } catch(e) {}
-                    }, 1500); 
+                    }, 2000); 
                 }
             }
         }
