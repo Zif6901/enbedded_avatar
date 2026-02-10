@@ -16,7 +16,6 @@
         }
         h1 { margin-bottom: 20px; color: #333; }
         
-        /* PROCESSING INDICATOR */
         #processing-bar {
             position: fixed;
             top: 0;
@@ -163,7 +162,7 @@
         let currentRoom = null;
         let recognition = null; 
         
-        // VAD Variables (Voice Activity Detection)
+        // VAD Variables
         let audioInterval = null;
         let isSpeaking = false;
         let silenceTimer = null;
@@ -207,7 +206,6 @@
             a.click();
         }
 
-        // --- SPEECH RECOGNITION (Local Backup) ---
         function initSpeechRecognition() {
             const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
             if (SpeechRecognition) {
@@ -260,25 +258,23 @@
             try {
                 currentRoom = new LivekitClient.Room({ adaptiveStream: true, dynacast: true });
 
-                // 1. VIDEO/AUDIO HANDLING (Agent Speaking)
+                // 1. VIDEO/AUDIO HANDLING
                 currentRoom.on(LivekitClient.RoomEvent.TrackSubscribed, (track) => {
                     document.getElementById('video-container').appendChild(track.attach());
-                    
-                    // When agent audio starts playing, hide "Processing"
                     if (track.kind === LivekitClient.Track.Kind.Audio) {
                          const element = track.attach();
                          element.onplay = () => setProcessing(false);
                     }
                 });
 
-                // 2. AGENT AUDIO ACTIVITY (Backup Indicator check)
+                // 2. AGENT AUDIO ACTIVITY
                 currentRoom.on(LivekitClient.RoomEvent.ActiveSpeakersChanged, (speakers) => {
                     const agentSpeaking = speakers.some(s => !s.isLocal);
                     if (agentSpeaking) setProcessing(false);
                 });
 
                 // 3. DATA HANDLING (Transcript & Response)
-                // This logic separates "User" vs "AI Eddie"
+                // FIX: Added logic to distinguish User events from Agent events
                 currentRoom.on(LivekitClient.RoomEvent.DataReceived, (payload) => {
                     const decoder = new TextDecoder();
                     const strData = decoder.decode(payload);
@@ -286,33 +282,30 @@
                     try {
                         const jsonData = JSON.parse(strData);
                         
-                        // Ignore technical status events
+                        // Ignore internal status events
                         if (["user.speak_started", "user.speak_ended", "agent.thinking"].includes(jsonData.event_type)) {
                             return; 
                         }
 
-                        // Determine the Speaker based on the event payload
-                        let senderName = "AI Eddie"; // Default to AI
+                        // Determine Speaker
+                        let senderName = "AI Eddie"; 
                         
-                        // FIX: Check if this is a transcript of the USER
-                        // LiveAvatar Full Mode echoes back user text or "transcription" events
-                        // We check specifically for role='user' or 'transcription' types
+                        // Check if this is a user transcript or message
                         if (jsonData.role === 'user' || jsonData.type === 'transcription' || jsonData.type === 'transcript') {
                             senderName = "User";
                         }
 
-                        // Extract actual message content
                         let messageText = jsonData.text || jsonData.message || jsonData.transcript;
                         
                         if (messageText) {
-                            // Only hide processing if it is the AI responding
+                            // Only hide processing if AI is responding
                             if (senderName === "AI Eddie") {
                                 setProcessing(false);
                             }
                             appendToTranscript(senderName, messageText);
                         }
                     } catch(e) {
-                        // Fallback for raw text - assume AI
+                        // Raw text fallback
                         if (strData && strData.length > 0) {
                              appendToTranscript("AI Eddie", strData);
                         }
@@ -325,7 +318,6 @@
                 document.getElementById('micBtn').disabled = false;
                 document.getElementById('sendBtn').disabled = false;
 
-                // Auto-start Mic & VAD
                 try {
                     await currentRoom.localParticipant.setMicrophoneEnabled(true);
                     document.getElementById('micBtn').classList.add("active-mic");
@@ -342,7 +334,6 @@
         }
 
         // --- CUSTOM VAD (Voice Activity Detection) ---
-        // Shows "Processing" immediately when you stop speaking
         function startAudioMonitoring() {
             if (audioInterval) clearInterval(audioInterval);
             
@@ -367,7 +358,7 @@
                     if (!silenceTimer) {
                         silenceTimer = setTimeout(() => {
                             isSpeaking = false;
-                            setProcessing(true); // Show processing immediately
+                            setProcessing(true); 
                         }, SILENCE_DELAY_MS);
                     }
                 }
@@ -399,8 +390,7 @@
             if (event.key === "Enter") sendTextCommand();
         }
 
-        // --- FIXED TEXT COMMAND SENDING (Client-side Command) ---
-        // FIX: Sends a Command Event as per Full Mode docs 
+        // --- FIX: TEXT COMMAND SENDING (Command Event) ---
         async function sendTextCommand() {
             const inputField = document.getElementById('textCommand');
             const text = inputField.value.trim();
@@ -409,8 +399,7 @@
             setProcessing(true); 
             appendToTranscript("User (Text)", text);
 
-            // 1. MUTE MIC (Prevention)
-            // Prevents background noise from overriding the command
+            // 1. Mute Mic to prevent interference
             const wasMicEnabled = currentRoom.localParticipant.isMicrophoneEnabled;
             if (wasMicEnabled) {
                 await currentRoom.localParticipant.setMicrophoneEnabled(false);
@@ -420,11 +409,10 @@
                 const encoder = new TextEncoder();
                 const timestamp = Date.now();
 
-                // 2. SEND COMMAND PAYLOAD
-                // "Command / Client-side events allow developers to send signals" 
-                // We send a 'conversation.input' event to instruct the avatar.
+                // 2. Send Command Payload for Full Mode
+                // Using 'conversation.input' signals the Full Mode session to process this text
                 const commandPayload = JSON.stringify({
-                    type: "conversation.input", // Explicit command type
+                    type: "conversation.input", 
                     text: text,
                     timestamp: timestamp
                 });
@@ -438,7 +426,7 @@
                 setProcessing(false);
                 updateStatus("Send Failed");
             } finally {
-                // 3. RESTORE MIC
+                // 3. Restore Mic after delay
                 if (wasMicEnabled) {
                     setTimeout(async () => {
                         try {
