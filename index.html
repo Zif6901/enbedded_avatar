@@ -160,7 +160,6 @@
 
     <script>
         let currentRoom = null;
-        let recognition = null; 
         let processingTimeout = null;
 
         // VAD Variables
@@ -224,7 +223,7 @@
             document.getElementById('transcriptLog').value = ""; 
 
             try {
-                // Audio Context Resume (Fixes some browser audio issues)
+                // Audio Context Resume
                 const AudioContext = window.AudioContext || window.webkitAudioContext;
                 if (AudioContext) {
                     const ctx = new AudioContext();
@@ -261,7 +260,7 @@
             try {
                 currentRoom = new LivekitClient.Room({ adaptiveStream: true, dynacast: true });
 
-                // 1. MONITOR AUDIO (Any incoming audio cancels processing)
+                // 1. MONITOR AUDIO
                 currentRoom.on(LivekitClient.RoomEvent.TrackSubscribed, (track) => {
                     document.getElementById('video-container').appendChild(track.attach());
                     
@@ -271,14 +270,14 @@
                     }
                 });
 
-                // 2. DATA HANDLING (Transcript & Response)
+                // 2. DATA HANDLING
                 currentRoom.on(LivekitClient.RoomEvent.DataReceived, (payload) => {
                     const decoder = new TextDecoder();
                     const strData = decoder.decode(payload);
                     try {
                         const jsonData = JSON.parse(strData);
                         
-                        // Technical events
+                        // Stop processing on agent activity
                         if (jsonData.event_type === "agent.speak_started") setProcessing(false);
                         if (["user.speak_started", "user.speak_ended", "agent.thinking"].includes(jsonData.event_type)) return; 
 
@@ -318,7 +317,7 @@
             }
         }
 
-        // --- CONTROLS ---
+        // --- VAD ---
         function startAudioMonitoring() {
             if (audioInterval) clearInterval(audioInterval);
             audioInterval = setInterval(() => {
@@ -365,8 +364,7 @@
             if (event.key === "Enter") sendTextCommand();
         }
 
-        // --- BROADCAST TEXT COMMAND STRATEGY ---
-        // Sends 3 different packet formats to ensure the Avatar responds.
+        // --- BROADCAST TRANSCRIPTION SPOOF STRATEGY ---
         async function sendTextCommand() {
             const inputField = document.getElementById('textCommand');
             const text = inputField.value.trim();
@@ -383,38 +381,34 @@
             try {
                 const encoder = new TextEncoder();
                 const timestamp = Date.now();
+                const uuid = "tx-" + Math.random().toString(36).substring(7);
 
-                // 1. AI CONVERSATION FORMAT (Primary for Full Mode)
-                const payloadConv = JSON.stringify({
-                    type: "conversation.input",
+                // 1. TRANSCRIPTION SPOOF (Primary)
+                // This mimics a speech-to-text event, forcing the agent to process the text as if spoken.
+                const payloadTrans = JSON.stringify({
+                    type: "transcription",
                     text: text,
+                    is_final: true,
+                    final: true,
+                    id: uuid,
                     timestamp: timestamp
                 });
 
-                // 2. CHAT WIDGET FORMAT (Standard Frontend)
+                // 2. CHAT PAYLOAD (Secondary)
                 const payloadChat = JSON.stringify({
                     message: text,
                     timestamp: timestamp
                 });
 
-                // 3. FORCE SPEAK FORMAT (Documentation fallback)
-                const payloadSpeak = JSON.stringify({
-                    type: "speak",
-                    text: text
-                });
-
-                // --- BROADCAST ---
-                // Send to default topic (Reliable)
-                await currentRoom.localParticipant.publishData(encoder.encode(payloadConv), { reliable: true });
+                // 3. BROADCAST
+                // Send to 'transcription' topic (Simulates Speech)
+                await currentRoom.localParticipant.publishData(encoder.encode(payloadTrans), { reliable: true, topic: "transcription" });
                 
-                // Send to 'lk-chat-topic' (Standard Topic)
+                // Send to 'lk-chat-topic' (Standard Widget)
                 await currentRoom.localParticipant.publishData(encoder.encode(payloadChat), { reliable: true, topic: "lk-chat-topic" });
 
-                // Send to 'chat' (Backend Topic)
+                // Send to 'chat' (Standard Backend)
                 await currentRoom.localParticipant.publishData(encoder.encode(payloadChat), { reliable: true, topic: "chat" });
-
-                // Send Speak Command
-                await currentRoom.localParticipant.publishData(encoder.encode(payloadSpeak), { reliable: true });
 
                 inputField.value = "";
                 
