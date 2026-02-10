@@ -213,6 +213,7 @@
                     // Show processing immediately after user speaks
                     setProcessing(true);
                     
+                    // Log locally
                     appendToTranscript("User (Speech)", text);
                 };
             } else {
@@ -282,17 +283,16 @@
                                          (jsonData.event_type === 'transcript') ||
                                          (jsonData.type === 'transcript');
 
+                        // If it is the user echo, DO NOT log as Eddie.
+                        if (isUserEcho) {
+                             return; // Skip logging, as we already logged "User (Speech)" locally
+                        }
+
                         // 3. Extract Text
                         let messageText = jsonData.text || jsonData.message || jsonData.transcript;
 
                         if (messageText) {
-                            if (isUserEcho) {
-                                // Optional: Log as 'User (Server)' or ignore if duplicates are annoying
-                                appendToTranscript("User (Verified)", messageText);
-                            } else {
-                                // Default to Agent
-                                appendToTranscript("AI Eddie", messageText);
-                            }
+                            appendToTranscript("AI Eddie", messageText);
                         }
 
                     } catch(e) {
@@ -345,6 +345,7 @@
             if (event.key === "Enter") sendTextCommand();
         }
 
+        // --- FIXED TEXT COMMAND SENDING ---
         async function sendTextCommand() {
             const inputField = document.getElementById('textCommand');
             const text = inputField.value.trim();
@@ -355,17 +356,30 @@
 
             try {
                 const encoder = new TextEncoder();
-                // Simplified Payload: Some agents require specific structure, 
-                // but a flat JSON with 'text' is the most compatible standard.
-                const jsonPayload = JSON.stringify({
-                    text: text,
-                    type: "chat", 
-                    timestamp: Date.now()
-                });
-
-                // Broadcast without specific topic to ensure delivery
-                await currentRoom.localParticipant.publishData(encoder.encode(jsonPayload), { reliable: true });
                 
+                // Construct a robust JSON payload that works with most Agents
+                const payloadObj = {
+                    text: text,
+                    message: text,
+                    content: text,
+                    type: "chat",
+                    timestamp: Date.now()
+                };
+                const jsonStr = JSON.stringify(payloadObj);
+                const encodedData = encoder.encode(jsonStr);
+
+                // --- SHOTGUN APPROACH ---
+                // Send to multiple topics to ensure the agent "hears" it
+                
+                // 1. Standard "chat" topic
+                await currentRoom.localParticipant.publishData(encodedData, { reliable: true, topic: "chat" });
+                
+                // 2. LiveKit Agent topic
+                await currentRoom.localParticipant.publishData(encodedData, { reliable: true, topic: "lk-chat-topic" });
+                
+                // 3. Default topic (no topic)
+                await currentRoom.localParticipant.publishData(encodedData, { reliable: true });
+
                 inputField.value = "";
             } catch (e) {
                 console.error(e);
