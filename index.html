@@ -160,7 +160,9 @@
 
     <script>
         let currentRoom = null;
+        let recognition = null; 
         let processingTimeout = null;
+        let agentAudioInterval = null;
 
         // VAD Variables
         let audioInterval = null;
@@ -183,13 +185,13 @@
                 txt.style.display = 'block';
                 updateStatus("Processing user input...");
                 
-                // Safety Timeout (10s)
+                // 15s Safety Timeout
                 processingTimeout = setTimeout(() => {
                     if (bar.style.display === 'block') {
                         setProcessing(false);
                         updateStatus("Connected (No response detected)");
                     }
-                }, 10000);
+                }, 15000);
 
             } else {
                 bar.style.display = 'none';
@@ -217,13 +219,29 @@
             a.click();
         }
 
+        // --- SPEECH RECOGNITION (Local Backup) ---
+        function initSpeechRecognition() {
+            const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+            if (SpeechRecognition) {
+                recognition = new SpeechRecognition();
+                recognition.continuous = true;      
+                recognition.interimResults = false; 
+                recognition.lang = 'en-US';
+                recognition.onresult = (event) => {
+                    const last = event.results.length - 1;
+                    const text = event.results[last][0].transcript;
+                    appendToTranscript("User (Speech)", text);
+                };
+            }
+        }
+
         // --- MAIN CONNECTION ---
         async function initSession() {
             updateStatus("Requesting Token...");
             document.getElementById('transcriptLog').value = ""; 
 
             try {
-                // Audio Context Resume
+                // Fix Audio Context
                 const AudioContext = window.AudioContext || window.webkitAudioContext;
                 if (AudioContext) {
                     const ctx = new AudioContext();
@@ -249,6 +267,7 @@
                 const innerData = data.data || data; 
                 
                 await connectToLiveKit(innerData.livekit_url, innerData.livekit_client_token);
+                initSpeechRecognition();
 
             } catch (error) {
                 updateStatus("Error: " + error.message);
@@ -260,13 +279,13 @@
             try {
                 currentRoom = new LivekitClient.Room({ adaptiveStream: true, dynacast: true });
 
-                // 1. MONITOR AUDIO
-                currentRoom.on(LivekitClient.RoomEvent.TrackSubscribed, (track) => {
+                // 1. MONITOR AGENT AUDIO
+                currentRoom.on(LivekitClient.RoomEvent.TrackSubscribed, (track, publication, participant) => {
                     document.getElementById('video-container').appendChild(track.attach());
-                    
                     if (track.kind === LivekitClient.Track.Kind.Audio) {
                         const element = track.attach();
-                        element.onplay = () => setProcessing(false);
+                        // Monitor volume to detect speech
+                        startAgentAudioMonitoring(participant);
                     }
                 });
 
@@ -277,11 +296,13 @@
                     try {
                         const jsonData = JSON.parse(strData);
                         
-                        // Stop processing on agent activity
-                        if (jsonData.event_type === "agent.speak_started") setProcessing(false);
-                        if (["user.speak_started", "user.speak_ended", "agent.thinking"].includes(jsonData.event_type)) return; 
+                        // Stop processing on ANY agent activity
+                        if (jsonData.event_type === "agent.speak_started" || jsonData.event_type === "agent.thinking") {
+                            setProcessing(false);
+                        }
 
-                        // Determine Speaker
+                        if (["user.speak_started", "user.speak_ended"].includes(jsonData.event_type)) return; 
+
                         let senderName = "AI Eddie"; 
                         if (jsonData.role === 'user' || jsonData.type === 'transcription' || jsonData.type === 'transcript') {
                             senderName = "User";
@@ -306,7 +327,8 @@
                 try {
                     await currentRoom.localParticipant.setMicrophoneEnabled(true);
                     document.getElementById('micBtn').classList.add("active-mic");
-                    startAudioMonitoring();
+                    startUserAudioMonitoring(); 
+                    if (recognition) recognition.start();
                     updateStatus("Connected & Mic Live");
                 } catch(e) {
                     updateStatus("Connected (Mic manual start required)");
@@ -317,8 +339,20 @@
             }
         }
 
-        // --- VAD ---
-        function startAudioMonitoring() {
+        // --- NEW: MONITOR AGENT VOLUME ---
+        // Turns off processing immediately if the agent makes a sound
+        function startAgentAudioMonitoring(participant) {
+            if (agentAudioInterval) clearInterval(agentAudioInterval);
+            agentAudioInterval = setInterval(() => {
+                if (!participant) return;
+                if (participant.audioLevel > 0.01) {
+                    setProcessing(false);
+                }
+            }, 100);
+        }
+
+        // --- USER VAD ---
+        function startUserAudioMonitoring() {
             if (audioInterval) clearInterval(audioInterval);
             audioInterval = setInterval(() => {
                 if (!currentRoom || !currentRoom.localParticipant) return;
@@ -351,7 +385,7 @@
             await currentRoom.localParticipant.setMicrophoneEnabled(!isEnabled);
             if (!isEnabled) {
                 btn.classList.add("active-mic");
-                startAudioMonitoring();
+                startUserAudioMonitoring();
                 updateStatus("Mic Live");
             } else {
                 btn.classList.remove("active-mic");
@@ -364,7 +398,8 @@
             if (event.key === "Enter") sendTextCommand();
         }
 
-        // --- BROADCAST TRANSCRIPTION SPOOF STRATEGY ---
+        // --- FIX: SPEECH SIMULATION SEQUENCE ---
+        // Mimics a full voice interaction lifecycle to force VAD to accept text
         async function sendTextCommand() {
             const inputField = document.getElementById('textCommand');
             const text = inputField.value.trim();
@@ -381,34 +416,35 @@
             try {
                 const encoder = new TextEncoder();
                 const timestamp = Date.now();
-                const uuid = "tx-" + Math.random().toString(36).substring(7);
 
-                // 1. TRANSCRIPTION SPOOF (Primary)
-                // This mimics a speech-to-text event, forcing the agent to process the text as if spoken.
-                const payloadTrans = JSON.stringify({
+                // 1. SIGNAL: STARTED SPEAKING
+                const startPayload = JSON.stringify({ type: "user.started_speaking", timestamp: timestamp });
+                
+                // 2. CONTENT: TRANSCRIPTION (The Text)
+                const textPayload = JSON.stringify({
                     type: "transcription",
                     text: text,
                     is_final: true,
                     final: true,
-                    id: uuid,
-                    timestamp: timestamp
+                    timestamp: timestamp + 50
                 });
 
-                // 2. CHAT PAYLOAD (Secondary)
-                const payloadChat = JSON.stringify({
-                    message: text,
-                    timestamp: timestamp
-                });
+                // 3. SIGNAL: ENDED SPEAKING
+                const endPayload = JSON.stringify({ type: "user.ended_speaking", timestamp: timestamp + 100 });
 
-                // 3. BROADCAST
-                // Send to 'transcription' topic (Simulates Speech)
-                await currentRoom.localParticipant.publishData(encoder.encode(payloadTrans), { reliable: true, topic: "transcription" });
+                // --- SEQUENCE SENDING ---
                 
-                // Send to 'lk-chat-topic' (Standard Widget)
-                await currentRoom.localParticipant.publishData(encoder.encode(payloadChat), { reliable: true, topic: "lk-chat-topic" });
+                // Step A: Wake up VAD
+                await currentRoom.localParticipant.publishData(encoder.encode(startPayload), { reliable: true });
 
-                // Send to 'chat' (Standard Backend)
-                await currentRoom.localParticipant.publishData(encoder.encode(payloadChat), { reliable: true, topic: "chat" });
+                // Step B: Send Text (on multiple topics to be safe)
+                await currentRoom.localParticipant.publishData(encoder.encode(textPayload), { reliable: true, topic: "transcription" });
+                
+                // Also send Raw Text fallback (some agents read this directly)
+                await currentRoom.localParticipant.publishData(encoder.encode(text), { reliable: true });
+
+                // Step C: Close VAD (Force Response)
+                await currentRoom.localParticipant.publishData(encoder.encode(endPayload), { reliable: true });
 
                 inputField.value = "";
                 
@@ -430,6 +466,7 @@
         async function disconnect() {
             if (currentRoom) await currentRoom.disconnect();
             if (audioInterval) clearInterval(audioInterval);
+            if (agentAudioInterval) clearInterval(agentAudioInterval);
             setProcessing(false);
             resetUI();
         }
