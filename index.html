@@ -163,12 +163,12 @@
         let currentRoom = null;
         let recognition = null; 
         
-        // Audio VAD Variables
+        // VAD (Voice Activity) Variables
         let audioInterval = null;
         let isSpeaking = false;
         let silenceTimer = null;
-        const SILENCE_THRESHOLD = 0.01; // Audio level threshold (0 to 1)
-        const SILENCE_DELAY_MS = 1000;  // How long to wait before deciding speech ended
+        const SILENCE_THRESHOLD = 0.01; 
+        const SILENCE_DELAY_MS = 800;  // Reduced delay for snappier response
         
         const SNAPLOGIC_URL = "https://tpalpb1wva002.verizon.com:8888/api/1/rest/feed/run/task/VerizonEISDev/DeliveryAssurance/shared/Embedded_Agent_Token_Request%20Task_Gnd?bearer_token=8tn6rpItp0F8RIYNNGq2LECBvdi9is2X";
 
@@ -341,42 +341,40 @@
             }
         }
 
-        // --- CUSTOM VAD (Voice Activity Detection) ---
-        // This monitors the mic directly to show "Processing" faster
+        // --- CUSTOM VAD (Audio Level Monitoring) ---
+        // Uses raw audio levels for instant feedback
         function startAudioMonitoring() {
             if (audioInterval) clearInterval(audioInterval);
             
             audioInterval = setInterval(() => {
                 if (!currentRoom || !currentRoom.localParticipant) return;
                 
-                // LiveKit calculates audio level (0 to 1)
+                // Audio level is 0 to 1
                 const audioLevel = currentRoom.localParticipant.audioLevel;
 
                 if (audioLevel > SILENCE_THRESHOLD) {
                     // USER IS SPEAKING
                     if (!isSpeaking) {
                         isSpeaking = true;
-                        // Hide processing while speaking
+                        // HIDE processing bar while speaking (waiting for end)
                         document.getElementById('processing-bar').style.display = 'none';
                         document.getElementById('processing-text').style.display = 'none';
                         updateStatus("Listening...");
                     }
-                    // Reset silence timer if they are still talking
                     if (silenceTimer) clearTimeout(silenceTimer);
                     silenceTimer = null;
                 
                 } else if (isSpeaking) {
-                    // USER STOPPED SPEAKING (Level dropped)
-                    // We wait X ms to ensure they are actually done
+                    // USER STOPPED SPEAKING
                     if (!silenceTimer) {
                         silenceTimer = setTimeout(() => {
                             isSpeaking = false;
-                            // TRIGGER PROCESSING INDICATOR HERE
+                            // INSTANTLY SHOW PROCESSING BAR
                             setProcessing(true);
                         }, SILENCE_DELAY_MS);
                     }
                 }
-            }, 50); // Check 20 times a second
+            }, 50); 
         }
 
         // --- CONTROLS ---
@@ -404,7 +402,7 @@
             if (event.key === "Enter") sendTextCommand();
         }
 
-        // --- UPDATED TEXT COMMAND SENDING ---
+        // --- FIXED TEXT COMMAND SENDING (SPOOFING + MUTE) ---
         async function sendTextCommand() {
             const inputField = document.getElementById('textCommand');
             const text = inputField.value.trim();
@@ -413,22 +411,34 @@
             setProcessing(true); 
             appendToTranscript("User (Text)", text);
 
+            // 1. TEMPORARILY MUTE MIC
+            // This is critical. It prevents your breath/typing noise from overriding the text command.
+            const wasMicEnabled = currentRoom.localParticipant.isMicrophoneEnabled;
+            if (wasMicEnabled) {
+                console.log("[Client] Muting mic to send text...");
+                await currentRoom.localParticipant.setMicrophoneEnabled(false);
+            }
+
             try {
                 const encoder = new TextEncoder();
                 const timestamp = Date.now();
 
-                // LiveKit Agents Standard Schema
-                // Most standard agents listen on 'chat' topic with this format
-                const payloadStandard = JSON.stringify({
-                    message: text,
+                // 2. SEND SPOOFED SPEECH PAYLOAD
+                // We send a packet that looks *exactly* like a final speech result.
+                const spoofPayload = JSON.stringify({
+                    type: "transcription", // Standard LiveKit Agent trigger
+                    text: text,
+                    is_final: true,        // CRITICAL: Tells agent "User is done talking"
+                    confidence: 1.0,
                     timestamp: timestamp
                 });
 
-                // Send to 'lk-chat-topic' (Used by LiveKit Components)
-                await currentRoom.localParticipant.publishData(encoder.encode(payloadStandard), { reliable: true, topic: "lk-chat-topic" });
+                // Broadcast to 'transcription' topic (Standard for STT injection)
+                await currentRoom.localParticipant.publishData(encoder.encode(spoofPayload), { reliable: true, topic: "transcription" });
 
-                // Send to 'chat' (Standard Backend Topic)
-                await currentRoom.localParticipant.publishData(encoder.encode(payloadStandard), { reliable: true, topic: "chat" });
+                // Also broadcast to 'chat' just in case
+                const chatPayload = JSON.stringify({ message: text, timestamp: timestamp });
+                await currentRoom.localParticipant.publishData(encoder.encode(chatPayload), { reliable: true, topic: "chat" });
 
                 inputField.value = "";
                 
@@ -436,6 +446,17 @@
                 console.error(e);
                 setProcessing(false);
                 updateStatus("Send Failed");
+            } finally {
+                // 3. UNMUTE MIC AFTER DELAY
+                // Wait 3 seconds to let the agent process the text without interference
+                if (wasMicEnabled) {
+                    setTimeout(async () => {
+                        try {
+                            console.log("[Client] Restoring mic...");
+                            await currentRoom.localParticipant.setMicrophoneEnabled(true);
+                        } catch(e) { console.warn("Failed to restore mic"); }
+                    }, 3000); 
+                }
             }
         }
 
