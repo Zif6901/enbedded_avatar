@@ -1,10 +1,9 @@
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>LiveAvatar Client - SnapLogic Integrated</title>
+    <title>Device Showcase Virtual Coworker</title>
     <script src="https://cdn.jsdelivr.net/npm/livekit-client/dist/livekit-client.umd.min.js"></script>
     <style>
         body { 
@@ -359,7 +358,7 @@
             if (event.key === "Enter") sendTextCommand();
         }
 
-        // --- FIXED TEXT COMMAND SENDING (Full Lifecycle Spoofing) ---
+        // --- FIXED TEXT COMMAND SENDING (Full Sequence) ---
         async function sendTextCommand() {
             const inputField = document.getElementById('textCommand');
             const text = inputField.value.trim();
@@ -371,46 +370,35 @@
             try {
                 const encoder = new TextEncoder();
                 const txID = "tx-" + Math.random().toString(36).substr(2, 9);
+                const timestamp = Date.now();
 
-                // --- PAYLOAD DEFINITIONS ---
-
-                // 1. Transcription Event (Spoofs Voice Input)
-                // This is the most reliable way to trigger an avatar
-                const payloadTranscription = JSON.stringify({
-                    type: "transcription",
-                    text: text,
-                    is_final: true,
-                    id: txID,
-                    timestamp: Date.now()
-                });
-
-                // 2. Chat Event (LiveKit Standard)
-                // Note: using 'lk-chat-topic' (dash) which is standard for widgets
-                const payloadChatStandard = JSON.stringify({
-                    message: text,
-                    timestamp: Date.now()
-                });
-
-                // 3. Chat Event (Alternative)
-                const payloadChatSimple = JSON.stringify({
-                    type: "chat",
-                    content: text,
-                    text: text
-                });
-
-                // --- BROADCAST SEQUENCE ---
-
-                // A. Send as Transcription (Reliable=True)
-                // We send this to 'transcription' topic AND default topic
-                await currentRoom.localParticipant.publishData(encoder.encode(payloadTranscription), { reliable: true, topic: "transcription" });
+                // Define Packets
+                const packetStart = JSON.stringify({ type: "user.started_speaking", timestamp: timestamp });
+                const packetText = JSON.stringify({ type: "transcription", text: text, is_final: true, id: txID, timestamp: timestamp + 10 });
+                const packetEnd = JSON.stringify({ type: "user.ended_speaking", timestamp: timestamp + 20 });
                 
-                // B. Send as Standard Chat (lk-chat-topic)
-                await currentRoom.localParticipant.publishData(encoder.encode(payloadChatStandard), { reliable: true, topic: "lk-chat-topic" });
+                const packetChat = JSON.stringify({ type: "chat", text: text, message: text });
 
-                // C. Send as Simple Chat (chat)
-                await currentRoom.localParticipant.publishData(encoder.encode(payloadChatSimple), { reliable: true, topic: "chat" });
+
+                // --- SEQUENCE SENDING ---
+                // We send a sequence to trick the agent's VAD/State Machine
+                
+                // 1. "I started speaking"
+                await currentRoom.localParticipant.publishData(encoder.encode(packetStart), { reliable: true });
+
+                // 2. "Here is what I said" (Transcription)
+                await currentRoom.localParticipant.publishData(encoder.encode(packetText), { reliable: true });
+                // (Also send on specific transcription topic for safety)
+                await currentRoom.localParticipant.publishData(encoder.encode(packetText), { reliable: true, topic: "transcription" });
+
+                // 3. "I stopped speaking"
+                await currentRoom.localParticipant.publishData(encoder.encode(packetEnd), { reliable: true });
+
+                // 4. "Chat Message" (Backup for standard chat agents)
+                await currentRoom.localParticipant.publishData(encoder.encode(packetChat), { reliable: true, topic: "lk-chat-topic" });
 
                 inputField.value = "";
+                console.log("[Client] Sent text sequence:", text);
                 
             } catch (e) {
                 console.error(e);
