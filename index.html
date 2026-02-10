@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Device Showcase Virtual Coworker (VAD Sequence Fix)</title>
+    <title>Device Showcase Virtual Coworker (Topic Spray)</title>
     <script src="https://cdn.jsdelivr.net/npm/livekit-client/dist/livekit-client.umd.min.js"></script>
     <style>
         body { 
@@ -267,8 +267,8 @@
                     try {
                         const jsonData = JSON.parse(strData);
                         
-                        // Stop processing on ANY agent activity
-                        if (jsonData.event_type && (jsonData.event_type.startsWith('avatar') || jsonData.type.startsWith('avatar'))) {
+                        // Universal Reset on any agent activity
+                        if (jsonData.event_type && (jsonData.event_type.startsWith('avatar') || jsonData.event_type.startsWith('agent'))) {
                             setProcessing(false);
                         }
                         
@@ -328,8 +328,8 @@
             if (event.key === "Enter") sendTextCommand();
         }
 
-        // --- THE VAD SIMULATION STRATEGY ---
-        // Sends the EXACT sequence of events found in the successful voice log
+        // --- TOPIC SPRAY STRATEGY ---
+        // Sends the correct payload to every possible topic
         async function sendTextCommand() {
             const inputField = document.getElementById('textCommand');
             const text = inputField.value.trim();
@@ -338,7 +338,7 @@
             setProcessing(true); 
             logToConsole(`[USER-INPUT] Sending: "${text}"`);
             
-            // Mute mic briefly to ensure pure data transmission
+            // Mute mic briefly
             const wasMicEnabled = currentRoom.localParticipant.isMicrophoneEnabled;
             if (wasMicEnabled) await currentRoom.localParticipant.setMicrophoneEnabled(false);
 
@@ -347,42 +347,27 @@
                 const timestamp = Date.now();
                 const uuid = crypto.randomUUID();
 
-                // 1. SIGNAL: START SPEAKING
-                // Matches log: "event_type":"user.speak_started"
-                const payloadStart = JSON.stringify({ 
-                    event_type: "user.speak_started", 
-                    timestamp: timestamp
-                });
-
-                // 2. SIGNAL: END SPEAKING
-                // Matches log: "event_type":"user.speak_ended"
-                const payloadEnd = JSON.stringify({ 
-                    event_type: "user.speak_ended", 
-                    timestamp: timestamp + 50
-                });
-
-                // 3. CONTENT: TRANSCRIPTION
-                // Matches log: "event_type":"user.transcription"
+                // THE GOLDEN PAYLOAD (Matches what the server echoed in logs)
                 const payloadTrans = JSON.stringify({ 
                     event_type: "user.transcription", 
                     text: text,
                     is_final: true,
-                    timestamp: timestamp + 100
+                    timestamp: timestamp,
+                    event_id: uuid
                 });
-
-                // --- EXECUTE SEQUENCE ---
                 
-                // STEP A: Send Start
-                await currentRoom.localParticipant.publishData(encoder.encode(payloadStart), { reliable: true });
-                logToConsole(`[SENT] Seq 1/3: user.speak_started`);
+                const topics = ["agent-input", "user-input", "chat", "transcription", "default"];
 
-                // STEP B: Send End
-                await currentRoom.localParticipant.publishData(encoder.encode(payloadEnd), { reliable: true });
-                logToConsole(`[SENT] Seq 2/3: user.speak_ended`);
-
-                // STEP C: Send Text
-                await currentRoom.localParticipant.publishData(encoder.encode(payloadTrans), { reliable: true });
-                logToConsole(`[SENT] Seq 3/3: user.transcription`);
+                // --- SPRAY ---
+                for (const topic of topics) {
+                    if (topic === "default") {
+                        await currentRoom.localParticipant.publishData(encoder.encode(payloadTrans), { reliable: true });
+                        logToConsole(`[SENT] Topic: (default) | Data: ${payloadTrans}`);
+                    } else {
+                        await currentRoom.localParticipant.publishData(encoder.encode(payloadTrans), { reliable: true, topic: topic });
+                        logToConsole(`[SENT] Topic: ${topic} | Data: ${payloadTrans}`);
+                    }
+                }
 
                 inputField.value = "";
                 
