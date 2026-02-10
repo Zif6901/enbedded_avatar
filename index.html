@@ -16,7 +16,6 @@
         }
         h1 { margin-bottom: 20px; color: #333; }
         
-        /* PROCESSING INDICATOR */
         #processing-bar {
             position: fixed;
             top: 0;
@@ -163,13 +162,14 @@
         let currentRoom = null;
         let recognition = null; 
         let processingTimeout = null;
+        let agentAudioInterval = null;
 
-        // VAD Variables (Voice Activity Detection)
+        // VAD Variables
         let audioInterval = null;
         let isSpeaking = false;
         let silenceTimer = null;
         const SILENCE_THRESHOLD = 0.01; 
-        const SILENCE_DELAY_MS = 1000; // Increased slightly to avoid cutting off sentences
+        const SILENCE_DELAY_MS = 1000; 
         
         const SNAPLOGIC_URL = "https://tpalpb1wva002.verizon.com:8888/api/1/rest/feed/run/task/VerizonEISDev/DeliveryAssurance/shared/Embedded_Agent_Token_Request%20Task_Gnd?bearer_token=8tn6rpItp0F8RIYNNGq2LECBvdi9is2X";
 
@@ -178,7 +178,6 @@
             const bar = document.getElementById('processing-bar');
             const txt = document.getElementById('processing-text');
             
-            // Clear any existing safety timeout
             if (processingTimeout) clearTimeout(processingTimeout);
 
             if (isProcessing) {
@@ -186,14 +185,13 @@
                 txt.style.display = 'block';
                 updateStatus("Processing user input...");
                 
-                // SAFETY TIMEOUT: If Avatar doesn't reply in 10s, reset UI
+                // 15s Safety Timeout
                 processingTimeout = setTimeout(() => {
                     if (bar.style.display === 'block') {
                         setProcessing(false);
                         updateStatus("Connected (No response detected)");
-                        console.warn("Processing timed out - Avatar did not reply.");
                     }
-                }, 10000);
+                }, 15000);
 
             } else {
                 bar.style.display = 'none';
@@ -204,7 +202,6 @@
 
         function appendToTranscript(sender, text) {
             if (!text || text.trim() === "") return; 
-
             const log = document.getElementById('transcriptLog');
             const timestamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
             log.value += `[${timestamp}] ${sender}: ${text}\n`;
@@ -222,7 +219,6 @@
             a.click();
         }
 
-        // --- SPEECH RECOGNITION (Local Backup) ---
         function initSpeechRecognition() {
             const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
             if (SpeechRecognition) {
@@ -230,7 +226,6 @@
                 recognition.continuous = true;      
                 recognition.interimResults = false; 
                 recognition.lang = 'en-US';
-
                 recognition.onresult = (event) => {
                     const last = event.results.length - 1;
                     const text = event.results[last][0].transcript;
@@ -245,8 +240,7 @@
             document.getElementById('transcriptLog').value = ""; 
 
             try {
-                // FIX: Ensure AudioContext is resumed immediately on user interaction
-                // This prevents the "Listening but not hearing" bug in some browsers.
+                // Audio Context Resume
                 const AudioContext = window.AudioContext || window.webkitAudioContext;
                 if (AudioContext) {
                     const ctx = new AudioContext();
@@ -284,68 +278,42 @@
             try {
                 currentRoom = new LivekitClient.Room({ adaptiveStream: true, dynacast: true });
 
-                // 1. VIDEO/AUDIO HANDLING (Agent Speaking)
-                currentRoom.on(LivekitClient.RoomEvent.TrackSubscribed, (track) => {
+                // 1. MONITOR AGENT AUDIO (Robust Response Detection)
+                currentRoom.on(LivekitClient.RoomEvent.TrackSubscribed, (track, publication, participant) => {
                     document.getElementById('video-container').appendChild(track.attach());
                     
-                    // FIX: Reliable "Processing Off" trigger
                     if (track.kind === LivekitClient.Track.Kind.Audio) {
-                         const element = track.attach();
-                         element.onplay = () => {
-                             setProcessing(false);
-                             console.log("Audio Track Playing - Processing OFF");
-                         };
+                        const element = track.attach();
+                        
+                        // FIX: Detect actual volume from Agent to turn off processing
+                        startAgentAudioMonitoring(participant);
                     }
                 });
 
-                // 2. AGENT AUDIO ACTIVITY (Backup Indicator check)
-                currentRoom.on(LivekitClient.RoomEvent.ActiveSpeakersChanged, (speakers) => {
-                    const agentSpeaking = speakers.some(s => !s.isLocal);
-                    if (agentSpeaking) {
-                        setProcessing(false);
-                    }
-                });
-
-                // 3. DATA HANDLING (Transcript & Response)
+                // 2. DATA HANDLING
                 currentRoom.on(LivekitClient.RoomEvent.DataReceived, (payload) => {
                     const decoder = new TextDecoder();
                     const strData = decoder.decode(payload);
-                    
                     try {
                         const jsonData = JSON.parse(strData);
                         
-                        // FIX: Use Specific Server Events to control UI
-                        // If agent starts speaking or thinking, we know it's alive.
-                        if (jsonData.event_type === "agent.speak_started") {
-                            setProcessing(false);
-                        }
+                        // If we get specific event, clear processing
+                        if (jsonData.event_type === "agent.speak_started") setProcessing(false);
 
-                        // Ignore technical status events for the log
-                        if (["user.speak_started", "user.speak_ended", "agent.thinking"].includes(jsonData.event_type)) {
-                            return; 
-                        }
+                        if (["user.speak_started", "user.speak_ended", "agent.thinking"].includes(jsonData.event_type)) return; 
 
-                        // Determine the Speaker based on the event payload
                         let senderName = "AI Eddie"; 
-                        
-                        // Check if this is a transcript of the USER
                         if (jsonData.role === 'user' || jsonData.type === 'transcription' || jsonData.type === 'transcript') {
                             senderName = "User";
                         }
 
-                        // Extract actual message content
                         let messageText = jsonData.text || jsonData.message || jsonData.transcript;
-                        
                         if (messageText) {
-                            if (senderName === "AI Eddie") {
-                                setProcessing(false); // Valid response received
-                            }
+                            if (senderName === "AI Eddie") setProcessing(false);
                             appendToTranscript(senderName, messageText);
                         }
                     } catch(e) {
-                        if (strData && strData.length > 0) {
-                             appendToTranscript("AI Eddie", strData);
-                        }
+                        if (strData && strData.length > 0) appendToTranscript("AI Eddie", strData);
                     }
                 });
 
@@ -355,14 +323,10 @@
                 document.getElementById('micBtn').disabled = false;
                 document.getElementById('sendBtn').disabled = false;
 
-                // Auto-start Mic & VAD
                 try {
                     await currentRoom.localParticipant.setMicrophoneEnabled(true);
                     document.getElementById('micBtn').classList.add("active-mic");
-                    
-                    // Explicitly start audio context monitoring
-                    startAudioMonitoring();
-                    
+                    startUserAudioMonitoring(); // User VAD
                     if (recognition) recognition.start();
                     updateStatus("Connected & Mic Live");
                 } catch(e) {
@@ -374,18 +338,29 @@
             }
         }
 
-        // --- CUSTOM VAD (Voice Activity Detection) ---
-        // Shows "Processing" immediately when you stop speaking
-        function startAudioMonitoring() {
-            if (audioInterval) clearInterval(audioInterval);
+        // --- NEW: MONITOR AGENT VOLUME ---
+        // This ensures "Processing" turns off even if we miss the data event
+        function startAgentAudioMonitoring(participant) {
+            if (agentAudioInterval) clearInterval(agentAudioInterval);
             
+            agentAudioInterval = setInterval(() => {
+                if (!participant) return;
+                // Check if agent audio level > 0
+                if (participant.audioLevel > 0.01) {
+                    // Agent is speaking!
+                    setProcessing(false);
+                }
+            }, 100);
+        }
+
+        // --- USER VAD ---
+        function startUserAudioMonitoring() {
+            if (audioInterval) clearInterval(audioInterval);
             audioInterval = setInterval(() => {
                 if (!currentRoom || !currentRoom.localParticipant) return;
-                
                 const audioLevel = currentRoom.localParticipant.audioLevel;
 
                 if (audioLevel > SILENCE_THRESHOLD) {
-                    // USER SPEAKING
                     if (!isSpeaking) {
                         isSpeaking = true;
                         document.getElementById('processing-bar').style.display = 'none';
@@ -394,30 +369,25 @@
                     }
                     if (silenceTimer) clearTimeout(silenceTimer);
                     silenceTimer = null;
-                
                 } else if (isSpeaking) {
-                    // USER STOPPED
                     if (!silenceTimer) {
                         silenceTimer = setTimeout(() => {
                             isSpeaking = false;
-                            setProcessing(true); // Show processing immediately
+                            setProcessing(true); // User done -> Processing ON
                         }, SILENCE_DELAY_MS);
                     }
                 }
             }, 50); 
         }
 
-        // --- CONTROLS ---
         async function toggleMic() {
             if (!currentRoom) return;
             const btn = document.getElementById('micBtn');
             const isEnabled = currentRoom.localParticipant.isMicrophoneEnabled;
-
             await currentRoom.localParticipant.setMicrophoneEnabled(!isEnabled);
-            
             if (!isEnabled) {
                 btn.classList.add("active-mic");
-                startAudioMonitoring(); 
+                startUserAudioMonitoring(); 
                 if (recognition) try { recognition.start(); } catch(e){}
                 updateStatus("Mic Live");
             } else {
@@ -432,7 +402,7 @@
             if (event.key === "Enter") sendTextCommand();
         }
 
-        // --- FIXED TEXT COMMAND SENDING (Command Event) ---
+        // --- TEXT COMMAND SENDING ---
         async function sendTextCommand() {
             const inputField = document.getElementById('textCommand');
             const text = inputField.value.trim();
@@ -441,7 +411,6 @@
             setProcessing(true); 
             appendToTranscript("User (Text)", text);
 
-            // 1. MUTE MIC (Prevention)
             const wasMicEnabled = currentRoom.localParticipant.isMicrophoneEnabled;
             if (wasMicEnabled) {
                 await currentRoom.localParticipant.setMicrophoneEnabled(false);
@@ -449,15 +418,10 @@
 
             try {
                 const encoder = new TextEncoder();
-                const timestamp = Date.now();
-
-                // 2. SEND COMMAND PAYLOAD
-                // "Command / Client-side events allow developers to send signals"
-                // We send a 'conversation.input' event to instruct the avatar.
                 const commandPayload = JSON.stringify({
-                    type: "conversation.input", // Explicit command type
+                    type: "conversation.input",
                     text: text,
-                    timestamp: timestamp
+                    timestamp: Date.now()
                 });
 
                 await currentRoom.localParticipant.publishData(encoder.encode(commandPayload), { reliable: true });
@@ -469,7 +433,6 @@
                 setProcessing(false);
                 updateStatus("Send Failed");
             } finally {
-                // 3. RESTORE MIC
                 if (wasMicEnabled) {
                     setTimeout(async () => {
                         try {
@@ -484,6 +447,7 @@
             if (currentRoom) await currentRoom.disconnect();
             if (recognition) recognition.stop();
             if (audioInterval) clearInterval(audioInterval);
+            if (agentAudioInterval) clearInterval(agentAudioInterval);
             setProcessing(false);
             resetUI();
         }
