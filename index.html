@@ -163,6 +163,13 @@
         let currentRoom = null;
         let recognition = null; 
         
+        // Audio VAD Variables
+        let audioInterval = null;
+        let isSpeaking = false;
+        let silenceTimer = null;
+        const SILENCE_THRESHOLD = 0.01; // Audio level threshold (0 to 1)
+        const SILENCE_DELAY_MS = 1000;  // How long to wait before deciding speech ended
+        
         const SNAPLOGIC_URL = "https://tpalpb1wva002.verizon.com:8888/api/1/rest/feed/run/task/VerizonEISDev/DeliveryAssurance/shared/Embedded_Agent_Token_Request%20Task_Gnd?bearer_token=8tn6rpItp0F8RIYNNGq2LECBvdi9is2X";
 
         // --- UI HELPERS ---
@@ -172,11 +179,11 @@
             if (isProcessing) {
                 bar.style.display = 'block';
                 txt.style.display = 'block';
-                console.log("[UI] Processing Indicator: ON");
+                updateStatus("Processing user input...");
             } else {
                 bar.style.display = 'none';
                 txt.style.display = 'none';
-                console.log("[UI] Processing Indicator: OFF");
+                updateStatus("Connected & Listening");
             }
         }
 
@@ -200,7 +207,7 @@
             a.click();
         }
 
-        // --- SPEECH RECOGNITION (Local) ---
+        // --- SPEECH RECOGNITION (Backup for Transcript Only) ---
         function initSpeechRecognition() {
             const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
             if (SpeechRecognition) {
@@ -212,13 +219,8 @@
                 recognition.onresult = (event) => {
                     const last = event.results.length - 1;
                     const text = event.results[last][0].transcript;
-                    
-                    // Force Processing ON when user finishes speaking
-                    setProcessing(true);
                     appendToTranscript("User (Speech)", text);
                 };
-            } else {
-                appendToTranscript("System", "Local speech-to-text not supported.");
             }
         }
 
@@ -261,15 +263,16 @@
                 // 1. VIDEO/AUDIO HANDLING (Agent Speaking)
                 currentRoom.on(LivekitClient.RoomEvent.TrackSubscribed, (track) => {
                     document.getElementById('video-container').appendChild(track.attach());
-                    // If we receive audio, the agent is responding -> Turn OFF processing
+                    
+                    // IF AGENT SPEAKS -> STOP PROCESSING
                     if (track.kind === LivekitClient.Track.Kind.Audio) {
-                        setProcessing(false);
+                         const element = track.attach();
+                         element.onplay = () => setProcessing(false);
                     }
                 });
 
-                // 2. ACTIVE SPEAKER DETECTION (Agent Speaking)
+                // 2. AGENT AUDIO ACTIVITY
                 currentRoom.on(LivekitClient.RoomEvent.ActiveSpeakersChanged, (speakers) => {
-                    // If any remote participant (Agent) is speaking, turn OFF processing
                     const agentSpeaking = speakers.some(s => !s.isLocal);
                     if (agentSpeaking) {
                         setProcessing(false);
@@ -300,7 +303,7 @@
                         let messageText = jsonData.text || jsonData.message || jsonData.transcript;
 
                         if (messageText) {
-                            // Valid text response -> Turn OFF processing
+                            // Agent sent text -> STOP PROCESSING
                             setProcessing(false);
                             appendToTranscript("AI Eddie", messageText);
                         }
@@ -323,6 +326,10 @@
                 try {
                     await currentRoom.localParticipant.setMicrophoneEnabled(true);
                     document.getElementById('micBtn').classList.add("active-mic");
+                    
+                    // START CUSTOM VAD MONITORING
+                    startAudioMonitoring();
+                    
                     if (recognition) recognition.start();
                     updateStatus("Connected & Mic Live");
                 } catch(e) {
@@ -332,6 +339,44 @@
             } catch (error) {
                 updateStatus("Connection Failed: " + error.message);
             }
+        }
+
+        // --- CUSTOM VAD (Voice Activity Detection) ---
+        // This monitors the mic directly to show "Processing" faster
+        function startAudioMonitoring() {
+            if (audioInterval) clearInterval(audioInterval);
+            
+            audioInterval = setInterval(() => {
+                if (!currentRoom || !currentRoom.localParticipant) return;
+                
+                // LiveKit calculates audio level (0 to 1)
+                const audioLevel = currentRoom.localParticipant.audioLevel;
+
+                if (audioLevel > SILENCE_THRESHOLD) {
+                    // USER IS SPEAKING
+                    if (!isSpeaking) {
+                        isSpeaking = true;
+                        // Hide processing while speaking
+                        document.getElementById('processing-bar').style.display = 'none';
+                        document.getElementById('processing-text').style.display = 'none';
+                        updateStatus("Listening...");
+                    }
+                    // Reset silence timer if they are still talking
+                    if (silenceTimer) clearTimeout(silenceTimer);
+                    silenceTimer = null;
+                
+                } else if (isSpeaking) {
+                    // USER STOPPED SPEAKING (Level dropped)
+                    // We wait X ms to ensure they are actually done
+                    if (!silenceTimer) {
+                        silenceTimer = setTimeout(() => {
+                            isSpeaking = false;
+                            // TRIGGER PROCESSING INDICATOR HERE
+                            setProcessing(true);
+                        }, SILENCE_DELAY_MS);
+                    }
+                }
+            }, 50); // Check 20 times a second
         }
 
         // --- CONTROLS ---
@@ -344,10 +389,12 @@
             
             if (!isEnabled) {
                 btn.classList.add("active-mic");
+                startAudioMonitoring(); // Restart VAD
                 if (recognition) try { recognition.start(); } catch(e){}
                 updateStatus("Mic Live");
             } else {
                 btn.classList.remove("active-mic");
+                if (audioInterval) clearInterval(audioInterval); // Stop VAD
                 if (recognition) recognition.stop();
                 updateStatus("Mic Muted");
             }
@@ -357,76 +404,33 @@
             if (event.key === "Enter") sendTextCommand();
         }
 
-        // --- FIXED TEXT COMMAND SENDING (TOTAL COVERAGE) ---
+        // --- UPDATED TEXT COMMAND SENDING ---
         async function sendTextCommand() {
             const inputField = document.getElementById('textCommand');
             const text = inputField.value.trim();
             if (!text || !currentRoom) return;
 
-            setProcessing(true); // TURN ON INDICATOR
+            setProcessing(true); 
             appendToTranscript("User (Text)", text);
 
             try {
                 const encoder = new TextEncoder();
                 const timestamp = Date.now();
 
-                // Define all possible payload formats used by LiveKit agents
-                
-                // 1. Standard Chat (Default LiveKit Widgets)
-                const payloadChat = JSON.stringify({
+                // LiveKit Agents Standard Schema
+                // Most standard agents listen on 'chat' topic with this format
+                const payloadStandard = JSON.stringify({
                     message: text,
                     timestamp: timestamp
                 });
 
-                // 2. Transcription (Spoofs STT)
-                const payloadTrans = JSON.stringify({
-                    type: "transcription",
-                    text: text,
-                    is_final: true,
-                    final: true, // Some agents check 'final', some 'is_final'
-                    timestamp: timestamp
-                });
+                // Send to 'lk-chat-topic' (Used by LiveKit Components)
+                await currentRoom.localParticipant.publishData(encoder.encode(payloadStandard), { reliable: true, topic: "lk-chat-topic" });
 
-                // 3. User Input (OpenAI/LLM Injection Style)
-                const payloadInput = JSON.stringify({
-                    type: "user_input",
-                    text: text
-                });
-
-                // 4. Conversation Item (Advanced Pipeline Style)
-                const payloadItem = JSON.stringify({
-                    type: "conversation_item",
-                    item: {
-                        type: "message",
-                        role: "user",
-                        content: text
-                    }
-                });
-
-                // 5. User Speech Committed (Event Style)
-                const payloadEvent = JSON.stringify({
-                    type: "user_speech_committed",
-                    text: text
-                });
-
-                // --- BROADCAST SEQUENCE ---
-                
-                // Send to 'chat' (Standard Backend)
-                await currentRoom.localParticipant.publishData(encoder.encode(payloadChat), { reliable: true, topic: "chat" });
-                
-                // Send to 'lk-chat-topic' (Standard Frontend)
-                await currentRoom.localParticipant.publishData(encoder.encode(payloadChat), { reliable: true, topic: "lk-chat-topic" });
-
-                // Send to 'transcription' (Speech Spoof)
-                await currentRoom.localParticipant.publishData(encoder.encode(payloadTrans), { reliable: true, topic: "transcription" });
-                
-                // Send to default (Fallbacks)
-                await currentRoom.localParticipant.publishData(encoder.encode(payloadInput), { reliable: true });
-                await currentRoom.localParticipant.publishData(encoder.encode(payloadItem), { reliable: true });
-                await currentRoom.localParticipant.publishData(encoder.encode(payloadEvent), { reliable: true });
+                // Send to 'chat' (Standard Backend Topic)
+                await currentRoom.localParticipant.publishData(encoder.encode(payloadStandard), { reliable: true, topic: "chat" });
 
                 inputField.value = "";
-                console.log("[Client] Sent text command via Total Coverage strategy.");
                 
             } catch (e) {
                 console.error(e);
@@ -438,6 +442,7 @@
         async function disconnect() {
             if (currentRoom) await currentRoom.disconnect();
             if (recognition) recognition.stop();
+            if (audioInterval) clearInterval(audioInterval);
             setProcessing(false);
             resetUI();
         }
