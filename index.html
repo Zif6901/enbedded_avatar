@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Device Showcase Virtual Coworker (Cluster Fix)</title>
+    <title>Device Showcase Virtual Coworker (VAD Sequence Fix)</title>
     <script src="https://cdn.jsdelivr.net/npm/livekit-client/dist/livekit-client.umd.min.js"></script>
     <style>
         body { 
@@ -70,9 +70,7 @@
             border: none; border-radius: 4px; font-weight: 600;
         }
         button:disabled { background-color: #ccc; cursor: not-allowed; }
-        button#disconnectBtn { background-color: #e00; }
-        button.active-mic { background-color: #e00; }
-
+        
         .transcript-container {
             width: 100%;
             max-width: 800px;
@@ -162,7 +160,6 @@
         
         const SNAPLOGIC_URL = "https://tpalpb1wva002.verizon.com:8888/api/1/rest/feed/run/task/VerizonEISDev/DeliveryAssurance/shared/Embedded_Agent_Token_Request%20Task_Gnd?bearer_token=8tn6rpItp0F8RIYNNGq2LECBvdi9is2X";
 
-        // --- UI HELPERS ---
         function setProcessing(isProcessing) {
             const bar = document.getElementById('processing-bar');
             const txt = document.getElementById('processing-text');
@@ -249,7 +246,6 @@
             try {
                 currentRoom = new LivekitClient.Room({ adaptiveStream: true, dynacast: true });
 
-                // 1. MONITOR AGENT AUDIO (To detect response)
                 currentRoom.on(LivekitClient.RoomEvent.TrackSubscribed, (track, publication, participant) => {
                     document.getElementById('video-container').appendChild(track.attach());
                     logToConsole(`[ROOM] Track Subscribed: ${track.kind}`);
@@ -263,7 +259,6 @@
                     }
                 });
 
-                // 2. DATA HANDLING
                 currentRoom.on(LivekitClient.RoomEvent.DataReceived, (payload, participant, kind, topic) => {
                     const decoder = new TextDecoder();
                     const strData = decoder.decode(payload);
@@ -273,7 +268,7 @@
                         const jsonData = JSON.parse(strData);
                         
                         // Stop processing on ANY agent activity
-                        if (jsonData.event_type && (jsonData.event_type.startsWith('agent') || jsonData.event_type.startsWith('avatar'))) {
+                        if (jsonData.event_type && (jsonData.event_type.startsWith('avatar') || jsonData.type.startsWith('avatar'))) {
                             setProcessing(false);
                         }
                         
@@ -333,8 +328,8 @@
             if (event.key === "Enter") sendTextCommand();
         }
 
-        // --- THE CLUSTER SHOT STRATEGY ---
-        // Sends multiple formats to ensure compatibility
+        // --- THE VAD SIMULATION STRATEGY ---
+        // Sends the EXACT sequence of events found in the successful voice log
         async function sendTextCommand() {
             const inputField = document.getElementById('textCommand');
             const text = inputField.value.trim();
@@ -343,44 +338,51 @@
             setProcessing(true); 
             logToConsole(`[USER-INPUT] Sending: "${text}"`);
             
-            // Mute mic briefly
+            // Mute mic briefly to ensure pure data transmission
             const wasMicEnabled = currentRoom.localParticipant.isMicrophoneEnabled;
             if (wasMicEnabled) await currentRoom.localParticipant.setMicrophoneEnabled(false);
 
             try {
                 const encoder = new TextEncoder();
                 const timestamp = Date.now();
+                const uuid = crypto.randomUUID();
 
-                // Format 1: Conversation Input (Standard AI)
-                const f1 = JSON.stringify({ type: "conversation.input", text: text });
-                
-                // Format 2: Say Command (Common Control)
-                const f2 = JSON.stringify({ type: "say", text: text });
-                
-                // Format 3: User Transcription (Spoofs Voice - High Probability)
-                const f3 = JSON.stringify({ 
-                    type: "transcription", 
-                    text: text, 
-                    is_final: true, 
-                    timestamp: timestamp 
+                // 1. SIGNAL: START SPEAKING
+                // Matches log: "event_type":"user.speak_started"
+                const payloadStart = JSON.stringify({ 
+                    event_type: "user.speak_started", 
+                    timestamp: timestamp
                 });
 
-                // Format 4: Chat (Standard Widget)
-                const f4 = JSON.stringify({ message: text });
-                
-                // Format 5: Raw Text Input (Matches your variable name)
-                const f5 = JSON.stringify({ type: "input_text", text: text });
+                // 2. SIGNAL: END SPEAKING
+                // Matches log: "event_type":"user.speak_ended"
+                const payloadEnd = JSON.stringify({ 
+                    event_type: "user.speak_ended", 
+                    timestamp: timestamp + 50
+                });
 
-                // --- FIRE ---
-                // We send to 'agent-input' because your logs show 'agent-response'
+                // 3. CONTENT: TRANSCRIPTION
+                // Matches log: "event_type":"user.transcription"
+                const payloadTrans = JSON.stringify({ 
+                    event_type: "user.transcription", 
+                    text: text,
+                    is_final: true,
+                    timestamp: timestamp + 100
+                });
+
+                // --- EXECUTE SEQUENCE ---
                 
-                await currentRoom.localParticipant.publishData(encoder.encode(f1), { reliable: true, topic: "agent-input" });
-                await currentRoom.localParticipant.publishData(encoder.encode(f2), { reliable: true, topic: "agent-input" });
-                await currentRoom.localParticipant.publishData(encoder.encode(f3), { reliable: true, topic: "agent-input" });
-                await currentRoom.localParticipant.publishData(encoder.encode(f4), { reliable: true, topic: "agent-input" });
-                await currentRoom.localParticipant.publishData(encoder.encode(f5), { reliable: true, topic: "agent-input" });
-                
-                logToConsole("[SENT] Cluster Shot fired to 'agent-input'");
+                // STEP A: Send Start
+                await currentRoom.localParticipant.publishData(encoder.encode(payloadStart), { reliable: true });
+                logToConsole(`[SENT] Seq 1/3: user.speak_started`);
+
+                // STEP B: Send End
+                await currentRoom.localParticipant.publishData(encoder.encode(payloadEnd), { reliable: true });
+                logToConsole(`[SENT] Seq 2/3: user.speak_ended`);
+
+                // STEP C: Send Text
+                await currentRoom.localParticipant.publishData(encoder.encode(payloadTrans), { reliable: true });
+                logToConsole(`[SENT] Seq 3/3: user.transcription`);
 
                 inputField.value = "";
                 
