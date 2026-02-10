@@ -284,7 +284,7 @@
                     try {
                         const jsonData = JSON.parse(strData);
                         
-                        // Ignore technical events - DO NOT Turn off processing
+                        // Ignore technical events
                         if (["user.speak_started", "user.speak_ended", "agent.thinking"].includes(jsonData.event_type)) {
                             return; 
                         }
@@ -357,7 +357,7 @@
             if (event.key === "Enter") sendTextCommand();
         }
 
-        // --- FIXED TEXT COMMAND SENDING (Broadband Strategy) ---
+        // --- FIXED TEXT COMMAND SENDING (TOTAL COVERAGE) ---
         async function sendTextCommand() {
             const inputField = document.getElementById('textCommand');
             const text = inputField.value.trim();
@@ -370,46 +370,63 @@
                 const encoder = new TextEncoder();
                 const timestamp = Date.now();
 
-                // --- 1. COMPOSITE PAYLOAD (Covers most Agent requirements) ---
-                const compositePayload = JSON.stringify({
-                    type: "chat",
-                    text: text,
-                    message: text,
-                    content: text,
-                    timestamp: timestamp
-                });
-
-                // --- 2. STANDARD WIDGET PAYLOAD (Strictly 'message' field) ---
-                const widgetPayload = JSON.stringify({
+                // Define all possible payload formats used by LiveKit agents
+                
+                // 1. Standard Chat (Default LiveKit Widgets)
+                const payloadChat = JSON.stringify({
                     message: text,
                     timestamp: timestamp
                 });
 
-                // --- 3. TRANSCRIPTION PAYLOAD (For VAD-less agents) ---
-                const transcriptPayload = JSON.stringify({
+                // 2. Transcription (Spoofs STT)
+                const payloadTrans = JSON.stringify({
                     type: "transcription",
                     text: text,
                     is_final: true,
+                    final: true, // Some agents check 'final', some 'is_final'
                     timestamp: timestamp
                 });
 
-                // --- BROADCAST TO ALL TOPICS ---
+                // 3. User Input (OpenAI/LLM Injection Style)
+                const payloadInput = JSON.stringify({
+                    type: "user_input",
+                    text: text
+                });
+
+                // 4. Conversation Item (Advanced Pipeline Style)
+                const payloadItem = JSON.stringify({
+                    type: "conversation_item",
+                    item: {
+                        type: "message",
+                        role: "user",
+                        content: text
+                    }
+                });
+
+                // 5. User Speech Committed (Event Style)
+                const payloadEvent = JSON.stringify({
+                    type: "user_speech_committed",
+                    text: text
+                });
+
+                // --- BROADCAST SEQUENCE ---
                 
-                // Channel A: 'lk-chat-topic' (LiveKit Standard Widget)
-                await currentRoom.localParticipant.publishData(encoder.encode(widgetPayload), { reliable: true, topic: "lk-chat-topic" });
+                // Send to 'chat' (Standard Backend)
+                await currentRoom.localParticipant.publishData(encoder.encode(payloadChat), { reliable: true, topic: "chat" });
+                
+                // Send to 'lk-chat-topic' (Standard Frontend)
+                await currentRoom.localParticipant.publishData(encoder.encode(payloadChat), { reliable: true, topic: "lk-chat-topic" });
 
-                // Channel B: 'chat' (Backend Standard - Composite)
-                await currentRoom.localParticipant.publishData(encoder.encode(compositePayload), { reliable: true, topic: "chat" });
-
-                // Channel C: 'transcription' (Direct Transcription Injection)
-                await currentRoom.localParticipant.publishData(encoder.encode(transcriptPayload), { reliable: true, topic: "transcription" });
-
-                // Channel D: DEFAULT (No Topic) - Raw Text Fallback
-                // Some simple agents just read the raw string from the default channel
-                await currentRoom.localParticipant.publishData(encoder.encode(text), { reliable: true });
+                // Send to 'transcription' (Speech Spoof)
+                await currentRoom.localParticipant.publishData(encoder.encode(payloadTrans), { reliable: true, topic: "transcription" });
+                
+                // Send to default (Fallbacks)
+                await currentRoom.localParticipant.publishData(encoder.encode(payloadInput), { reliable: true });
+                await currentRoom.localParticipant.publishData(encoder.encode(payloadItem), { reliable: true });
+                await currentRoom.localParticipant.publishData(encoder.encode(payloadEvent), { reliable: true });
 
                 inputField.value = "";
-                console.log("[Client] Text command broadcasted to all channels.");
+                console.log("[Client] Sent text command via Total Coverage strategy.");
                 
             } catch (e) {
                 console.error(e);
