@@ -284,9 +284,8 @@
                     try {
                         const jsonData = JSON.parse(strData);
                         
-                        // Ignore technical events
+                        // Ignore technical events - DO NOT Turn off processing
                         if (["user.speak_started", "user.speak_ended", "agent.thinking"].includes(jsonData.event_type)) {
-                            // Do NOT turn off processing for these
                             return; 
                         }
 
@@ -301,7 +300,7 @@
                         let messageText = jsonData.text || jsonData.message || jsonData.transcript;
 
                         if (messageText) {
-                            // We got a real text response -> Turn OFF processing
+                            // Valid text response -> Turn OFF processing
                             setProcessing(false);
                             appendToTranscript("AI Eddie", messageText);
                         }
@@ -358,7 +357,7 @@
             if (event.key === "Enter") sendTextCommand();
         }
 
-        // --- FIXED TEXT COMMAND SENDING (Full Sequence) ---
+        // --- FIXED TEXT COMMAND SENDING (Broadband Strategy) ---
         async function sendTextCommand() {
             const inputField = document.getElementById('textCommand');
             const text = inputField.value.trim();
@@ -369,36 +368,48 @@
 
             try {
                 const encoder = new TextEncoder();
-                const txID = "tx-" + Math.random().toString(36).substr(2, 9);
                 const timestamp = Date.now();
 
-                // Define Packets
-                const packetStart = JSON.stringify({ type: "user.started_speaking", timestamp: timestamp });
-                const packetText = JSON.stringify({ type: "transcription", text: text, is_final: true, id: txID, timestamp: timestamp + 10 });
-                const packetEnd = JSON.stringify({ type: "user.ended_speaking", timestamp: timestamp + 20 });
+                // --- 1. COMPOSITE PAYLOAD (Covers most Agent requirements) ---
+                const compositePayload = JSON.stringify({
+                    type: "chat",
+                    text: text,
+                    message: text,
+                    content: text,
+                    timestamp: timestamp
+                });
+
+                // --- 2. STANDARD WIDGET PAYLOAD (Strictly 'message' field) ---
+                const widgetPayload = JSON.stringify({
+                    message: text,
+                    timestamp: timestamp
+                });
+
+                // --- 3. TRANSCRIPTION PAYLOAD (For VAD-less agents) ---
+                const transcriptPayload = JSON.stringify({
+                    type: "transcription",
+                    text: text,
+                    is_final: true,
+                    timestamp: timestamp
+                });
+
+                // --- BROADCAST TO ALL TOPICS ---
                 
-                const packetChat = JSON.stringify({ type: "chat", text: text, message: text });
+                // Channel A: 'lk-chat-topic' (LiveKit Standard Widget)
+                await currentRoom.localParticipant.publishData(encoder.encode(widgetPayload), { reliable: true, topic: "lk-chat-topic" });
 
+                // Channel B: 'chat' (Backend Standard - Composite)
+                await currentRoom.localParticipant.publishData(encoder.encode(compositePayload), { reliable: true, topic: "chat" });
 
-                // --- SEQUENCE SENDING ---
-                // We send a sequence to trick the agent's VAD/State Machine
-                
-                // 1. "I started speaking"
-                await currentRoom.localParticipant.publishData(encoder.encode(packetStart), { reliable: true });
+                // Channel C: 'transcription' (Direct Transcription Injection)
+                await currentRoom.localParticipant.publishData(encoder.encode(transcriptPayload), { reliable: true, topic: "transcription" });
 
-                // 2. "Here is what I said" (Transcription)
-                await currentRoom.localParticipant.publishData(encoder.encode(packetText), { reliable: true });
-                // (Also send on specific transcription topic for safety)
-                await currentRoom.localParticipant.publishData(encoder.encode(packetText), { reliable: true, topic: "transcription" });
-
-                // 3. "I stopped speaking"
-                await currentRoom.localParticipant.publishData(encoder.encode(packetEnd), { reliable: true });
-
-                // 4. "Chat Message" (Backup for standard chat agents)
-                await currentRoom.localParticipant.publishData(encoder.encode(packetChat), { reliable: true, topic: "lk-chat-topic" });
+                // Channel D: DEFAULT (No Topic) - Raw Text Fallback
+                // Some simple agents just read the raw string from the default channel
+                await currentRoom.localParticipant.publishData(encoder.encode(text), { reliable: true });
 
                 inputField.value = "";
-                console.log("[Client] Sent text sequence:", text);
+                console.log("[Client] Text command broadcasted to all channels.");
                 
             } catch (e) {
                 console.error(e);
