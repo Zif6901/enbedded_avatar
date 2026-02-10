@@ -70,8 +70,6 @@
             border: none; border-radius: 4px; font-weight: 600;
         }
         button:disabled { background-color: #ccc; cursor: not-allowed; }
-        button#disconnectBtn { background-color: #e00; }
-        button.active-mic { background-color: #e00; }
         
         .transcript-container {
             width: 100%;
@@ -157,32 +155,26 @@
 
     <script>
         let currentRoom = null;
-        let recognition = null; 
         let processingTimeout = null;
         let agentAudioInterval = null;
         
         const SNAPLOGIC_URL = "https://tpalpb1wva002.verizon.com:8888/api/1/rest/feed/run/task/VerizonEISDev/DeliveryAssurance/shared/Embedded_Agent_Token_Request%20Task_Gnd?bearer_token=8tn6rpItp0F8RIYNNGq2LECBvdi9is2X";
 
-        // --- UI HELPERS ---
         function setProcessing(isProcessing) {
             const bar = document.getElementById('processing-bar');
             const txt = document.getElementById('processing-text');
-            
             if (processingTimeout) clearTimeout(processingTimeout);
 
             if (isProcessing) {
                 bar.style.display = 'block';
                 txt.style.display = 'block';
                 updateStatus("Processing user input...");
-                
-                // 15s Safety Timeout
                 processingTimeout = setTimeout(() => {
                     if (bar.style.display === 'block') {
                         setProcessing(false);
                         logToConsole("[WARN] Processing timed out. No response detected.");
                     }
                 }, 15000);
-
             } else {
                 bar.style.display = 'none';
                 txt.style.display = 'none';
@@ -208,18 +200,14 @@
             a.click();
         }
 
-        // --- MAIN CONNECTION ---
         async function initSession() {
-            // FIX: Prevent double clicks triggering double sessions
             if (currentRoom) return;
             document.getElementById('connectBtn').disabled = true;
-
             updateStatus("Requesting Token...");
             document.getElementById('transcriptLog').value = ""; 
             logToConsole("[SYSTEM] Starting Session Init...");
 
             try {
-                // Audio Context Resume
                 const AudioContext = window.AudioContext || window.webkitAudioContext;
                 if (AudioContext) {
                     const ctx = new AudioContext();
@@ -258,11 +246,9 @@
             try {
                 currentRoom = new LivekitClient.Room({ adaptiveStream: true, dynacast: true });
 
-                // 1. MONITOR AGENT AUDIO
                 currentRoom.on(LivekitClient.RoomEvent.TrackSubscribed, (track, publication, participant) => {
                     document.getElementById('video-container').appendChild(track.attach());
-                    logToConsole(`[ROOM] Track Subscribed: ${track.kind} (Source: ${track.source})`);
-                    
+                    logToConsole(`[ROOM] Track Subscribed: ${track.kind}`);
                     if (track.kind === LivekitClient.Track.Kind.Audio) {
                         const element = track.attach();
                         element.onplay = () => {
@@ -273,35 +259,15 @@
                     }
                 });
 
-                // 2. DATA HANDLING (Updated for your logs)
                 currentRoom.on(LivekitClient.RoomEvent.DataReceived, (payload, participant, kind, topic) => {
                     const decoder = new TextDecoder();
                     const strData = decoder.decode(payload);
-                    logToConsole(`[RECEIVED] Topic: "${topic || 'default'}" | Data: ${strData}`);
+                    logToConsole(`[RECEIVED] Topic: "${topic}" | Data: ${strData}`);
                     
                     try {
                         const jsonData = JSON.parse(strData);
-                        
-                        // FIX: Listen for the EXACT events in your log
-                        if (jsonData.type === "avatar_start_talking" || 
-                            jsonData.event_type === "avatar.transcription" ||
-                            (jsonData.event_type && jsonData.event_type.startsWith('avatar.'))) {
-                            setProcessing(false);
-                        }
-
-                        // Determine Speaker Label
-                        let senderName = "AI Eddie"; 
-                        // Note: Logs show 'avatar.transcription' comes from agent, but contains text
-                        if (jsonData.event_type === "avatar.transcription") {
-                             // This is actually what the AVATAR says in your system
-                             senderName = "AI Eddie";
-                        }
-                        
-                        // Log parsed message
-                        let messageText = jsonData.text || jsonData.message;
-                        if (messageText) {
-                            // Only update UI, logging handled by raw
-                        }
+                        // UNIVERSAL RESET on any agent message
+                        setProcessing(false);
                     } catch(e) {}
                 });
                 
@@ -314,7 +280,6 @@
                 document.getElementById('micBtn').disabled = false;
                 document.getElementById('sendBtn').disabled = false;
 
-                // Auto-start Mic
                 try {
                     await currentRoom.localParticipant.setMicrophoneEnabled(true);
                     document.getElementById('micBtn').classList.add("active-mic");
@@ -324,8 +289,7 @@
                 }
 
             } catch (error) {
-                logToConsole(`[ERROR] LiveKit Connection Failed: ${error.message}`);
-                updateStatus("Connection Failed: " + error.message);
+                logToConsole(`[ERROR] Connection Failed: ${error.message}`);
                 document.getElementById('connectBtn').disabled = false;
             }
         }
@@ -356,7 +320,7 @@
             if (event.key === "Enter") sendTextCommand();
         }
 
-        // --- COMMAND SENDING (UPDATED FOR AGENT-INPUT) ---
+        // --- THE BROADSIDE SEND STRATEGY ---
         async function sendTextCommand() {
             const inputField = document.getElementById('textCommand');
             const text = inputField.value.trim();
@@ -364,37 +328,57 @@
 
             setProcessing(true); 
             logToConsole(`[USER-INPUT] Sending: "${text}"`);
+            
+            // Mute mic to prevent noise interference
+            const wasMicEnabled = currentRoom.localParticipant.isMicrophoneEnabled;
+            if (wasMicEnabled) await currentRoom.localParticipant.setMicrophoneEnabled(false);
 
             try {
                 const encoder = new TextEncoder();
                 const timestamp = Date.now();
 
-                // 1. Text Input Payload (Matches common Verizon/LiveAvatar schemas)
-                const payloadTextInput = JSON.stringify({ 
-                    type: "text_input", 
+                // PAYLOAD 1: TRANSCRIPTION SPOOF (Primary Target)
+                // Matches the "avatar.transcription" event seen in logs
+                const payloadTrans = JSON.stringify({ 
+                    event_type: "user.transcription", 
                     text: text,
+                    is_final: true,
                     timestamp: timestamp
                 });
 
-                // 2. Chat Payload (Backup)
+                // PAYLOAD 2: STANDARD CHAT (Secondary Target)
                 const payloadChat = JSON.stringify({ message: text });
 
-                // --- FIX: BROADCAST TO "agent-input" ---
-                // Since the server replies on "agent-response", it listens on "agent-input"
-                
-                // Try Topic: agent-input
-                await currentRoom.localParticipant.publishData(encoder.encode(payloadTextInput), { reliable: true, topic: "agent-input" });
-                logToConsole(`[SENT] Topic: agent-input | Data: ${payloadTextInput}`);
+                // PAYLOAD 3: AGENT COMMAND (Tertiary Target)
+                const payloadCommand = JSON.stringify({ type: "speak", text: text });
 
-                // Try Topic: default (Reliable)
-                await currentRoom.localParticipant.publishData(encoder.encode(payloadTextInput), { reliable: true });
-                logToConsole(`[SENT] Topic: default | Data: ${payloadTextInput}`);
+
+                // --- FIRE ALL 3 FORMATS ---
+                
+                // 1. Send to "transcription" topic (Most likely to work)
+                await currentRoom.localParticipant.publishData(encoder.encode(payloadTrans), { reliable: true, topic: "transcription" });
+                logToConsole(`[SENT] Topic: transcription | Data: ${payloadTrans}`);
+
+                // 2. Send to "chat" topic
+                await currentRoom.localParticipant.publishData(encoder.encode(payloadChat), { reliable: true, topic: "chat" });
+                logToConsole(`[SENT] Topic: chat | Data: ${payloadChat}`);
+
+                // 3. Send to "agent-input" topic
+                // Note: Logs showed agent using "agent-response", so "agent-input" is the logical pair.
+                await currentRoom.localParticipant.publishData(encoder.encode(payloadCommand), { reliable: true, topic: "agent-input" });
+                logToConsole(`[SENT] Topic: agent-input | Data: ${payloadCommand}`);
 
                 inputField.value = "";
                 
             } catch (e) {
                 logToConsole(`[ERROR] Send Failed: ${e.message}`);
                 setProcessing(false);
+            } finally {
+                if (wasMicEnabled) {
+                    setTimeout(async () => {
+                        try { await currentRoom.localParticipant.setMicrophoneEnabled(true); } catch(e) {}
+                    }, 1500); 
+                }
             }
         }
 
@@ -403,7 +387,6 @@
             if (currentRoom) await currentRoom.disconnect();
             if (agentAudioInterval) clearInterval(agentAudioInterval);
             setProcessing(false);
-            
             document.getElementById('video-container').innerHTML = '';
             document.getElementById('disconnectBtn').disabled = true;
             document.getElementById('sendBtn').disabled = true;
