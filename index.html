@@ -268,11 +268,12 @@
                     try {
                         const jsonData = JSON.parse(strData);
                         
+                        // Ignore technical events
                         if (["user.speak_started", "user.speak_ended", "agent.thinking"].includes(jsonData.event_type)) {
                             return;
                         }
 
-                        // Ignore echo of user speech
+                        // Ignore user echo (prevents "AI Eddie" labeling user text)
                         const isUserEcho = (jsonData.role === 'user') || 
                                          (jsonData.event_type === 'transcript') ||
                                          (jsonData.type === 'transcript') || 
@@ -297,6 +298,7 @@
                 document.getElementById('micBtn').disabled = false;
                 document.getElementById('sendBtn').disabled = false;
 
+                // Auto-start Mic
                 try {
                     await currentRoom.localParticipant.setMicrophoneEnabled(true);
                     document.getElementById('micBtn').classList.add("active-mic");
@@ -334,43 +336,66 @@
             if (event.key === "Enter") sendTextCommand();
         }
 
-        // --- FIXED TEXT COMMAND SENDING (SPOOFING SPEECH) ---
+        // --- UNIVERSAL TEXT COMMAND SENDER ---
         async function sendTextCommand() {
             const inputField = document.getElementById('textCommand');
             const text = inputField.value.trim();
             if (!text || !currentRoom) return;
 
-            setProcessing(true);
+            setProcessing(true); 
             appendToTranscript("User (Text)", text);
+
+            // 1. VAD PROTECTION: Temporarily Mute Mic if it's on
+            // This prevents background noise from overriding the text command
+            const wasMicEnabled = currentRoom.localParticipant.isMicrophoneEnabled;
+            if (wasMicEnabled) {
+                await currentRoom.localParticipant.setMicrophoneEnabled(false);
+            }
 
             try {
                 const encoder = new TextEncoder();
                 
-                // --- STRATEGY: MIMIC A SPEECH TRANSCRIPTION ---
-                // We send a packet that looks like a final speech result.
-                // This tricks the agent into thinking you spoke this text.
-                const transcriptionPayload = JSON.stringify({
-                    type: "transcription",
-                    text: text,
-                    is_final: true,
-                    confidence: 1.0,
-                    id: Date.now().toString()
+                // Payload A: Standard LiveKit Chat (JSON with timestamp)
+                const payloadStandard = JSON.stringify({
+                    message: text,
+                    timestamp: Date.now()
                 });
                 
-                const encodedData = encoder.encode(transcriptionPayload);
+                // Payload B: Simple JSON (Common for custom agents)
+                const payloadSimple = JSON.stringify({
+                    text: text,
+                    type: "chat"
+                });
 
-                // 1. Send as default data (Reliable)
-                await currentRoom.localParticipant.publishData(encodedData, { reliable: true });
+                // Payload C: Raw Text
+                const payloadRaw = text;
 
-                // 2. Send as "transcription" topic (Reliable)
-                // Some agents listen specifically for this topic
-                await currentRoom.localParticipant.publishData(encodedData, { reliable: true, topic: "transcription" });
+                // --- BROADCAST ON ALL COMMON CHANNELS ---
+                
+                // 1. Send to 'lk-chat-topic' (Standard Frontend UI topic)
+                await currentRoom.localParticipant.publishData(encoder.encode(payloadStandard), { reliable: true, topic: "lk-chat-topic" });
+                
+                // 2. Send to 'chat' (Standard Backend topic) - Send Simple JSON
+                await currentRoom.localParticipant.publishData(encoder.encode(payloadSimple), { reliable: true, topic: "chat" });
+
+                // 3. Send to 'chat' - Send Raw Text (Fallback for simple agents)
+                await currentRoom.localParticipant.publishData(encoder.encode(payloadRaw), { reliable: true, topic: "chat" });
 
                 inputField.value = "";
+                
             } catch (e) {
                 console.error(e);
                 setProcessing(false);
                 updateStatus("Send Failed");
+            } finally {
+                // Restore Mic State after a short delay to allow server to process text
+                if (wasMicEnabled) {
+                    setTimeout(async () => {
+                        try {
+                            await currentRoom.localParticipant.setMicrophoneEnabled(true);
+                        } catch(e) { console.warn("Failed to restore mic"); }
+                    }, 500); // 500ms delay
+                }
             }
         }
 
