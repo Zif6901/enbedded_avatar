@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>LiveAvatar Client - SnapLogic Integrated</title>
+    <title>Device Showcase Virtual Coworker</title>
     <script src="https://cdn.jsdelivr.net/npm/livekit-client/dist/livekit-client.umd.min.js"></script>
     <style>
         body { 
@@ -22,7 +22,7 @@
             top: 0;
             left: 0;
             width: 100%;
-            height: 4px;
+            height: 6px; /* Made slightly thicker for visibility */
             background: linear-gradient(90deg, #0070f3, #00c6ff);
             z-index: 1000;
             display: none; 
@@ -35,15 +35,16 @@
         }
         #processing-text {
             position: fixed;
-            top: 10px;
+            top: 15px;
             background: rgba(0, 112, 243, 0.9);
             color: white;
-            padding: 5px 15px;
+            padding: 8px 20px;
             border-radius: 20px;
-            font-size: 12px;
+            font-size: 14px;
             font-weight: bold;
             z-index: 1001;
             display: none;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.2);
         }
 
         #video-container { 
@@ -171,9 +172,11 @@
             if (isProcessing) {
                 bar.style.display = 'block';
                 txt.style.display = 'block';
+                console.log("[UI] Processing Indicator: ON");
             } else {
                 bar.style.display = 'none';
                 txt.style.display = 'none';
+                console.log("[UI] Processing Indicator: OFF");
             }
         }
 
@@ -210,6 +213,7 @@
                     const last = event.results.length - 1;
                     const text = event.results[last][0].transcript;
                     
+                    // Force Processing ON when user finishes speaking
                     setProcessing(true);
                     appendToTranscript("User (Speech)", text);
                 };
@@ -254,22 +258,21 @@
             try {
                 currentRoom = new LivekitClient.Room({ adaptiveStream: true, dynacast: true });
 
-                // 1. VIDEO HANDLING
+                // 1. VIDEO/AUDIO HANDLING (Agent Speaking)
                 currentRoom.on(LivekitClient.RoomEvent.TrackSubscribed, (track) => {
                     document.getElementById('video-container').appendChild(track.attach());
-                    
-                    // If AUDIO track is subscribed (Agent speaking), turn OFF processing
+                    // If we receive audio, the agent is responding -> Turn OFF processing
                     if (track.kind === LivekitClient.Track.Kind.Audio) {
                         setProcessing(false);
                     }
                 });
 
-                // 2. AUDIO ACTIVITY HANDLING
+                // 2. ACTIVE SPEAKER DETECTION (Agent Speaking)
                 currentRoom.on(LivekitClient.RoomEvent.ActiveSpeakersChanged, (speakers) => {
-                    // Check if a remote participant (Agent) is speaking
+                    // If any remote participant (Agent) is speaking, turn OFF processing
                     const agentSpeaking = speakers.some(s => !s.isLocal);
                     if (agentSpeaking) {
-                        setProcessing(false); // Stop processing bar if agent talks
+                        setProcessing(false);
                     }
                 });
 
@@ -281,8 +284,9 @@
                     try {
                         const jsonData = JSON.parse(strData);
                         
-                        // Ignore technical events - DO NOT turn off processing for these
+                        // Ignore technical events
                         if (["user.speak_started", "user.speak_ended", "agent.thinking"].includes(jsonData.event_type)) {
+                            // Do NOT turn off processing for these
                             return; 
                         }
 
@@ -297,7 +301,7 @@
                         let messageText = jsonData.text || jsonData.message || jsonData.transcript;
 
                         if (messageText) {
-                            // If we received actual text, we can stop the processing indicator
+                            // We got a real text response -> Turn OFF processing
                             setProcessing(false);
                             appendToTranscript("AI Eddie", messageText);
                         }
@@ -354,48 +358,37 @@
             if (event.key === "Enter") sendTextCommand();
         }
 
-        // --- FIXED TEXT COMMAND SENDING ---
+        // --- FIXED TEXT COMMAND SENDING (Spoofing Transcription) ---
         async function sendTextCommand() {
             const inputField = document.getElementById('textCommand');
             const text = inputField.value.trim();
             if (!text || !currentRoom) return;
 
-            setProcessing(true); 
+            setProcessing(true); // TURN ON INDICATOR
             appendToTranscript("User (Text)", text);
-
-            const wasMicEnabled = currentRoom.localParticipant.isMicrophoneEnabled;
-            if (wasMicEnabled) {
-                await currentRoom.localParticipant.setMicrophoneEnabled(false);
-            }
 
             try {
                 const encoder = new TextEncoder();
-                
-                // LiveKit Standard Chat Format
-                const payloadStandard = JSON.stringify({
-                    message: text,
-                    timestamp: Date.now()
-                });
-                
-                // Simple Format
-                const payloadSimple = JSON.stringify({
-                    text: text,
-                    type: "chat"
-                });
 
-                // 1. Send to 'lk.chat' (Standard LiveKit Agent Topic)
-                await currentRoom.localParticipant.publishData(encoder.encode(payloadSimple), { reliable: true, topic: "lk.chat" });
-                
-                // 2. Send to 'chat' (Legacy/Alternative Topic)
-                await currentRoom.localParticipant.publishData(encoder.encode(payloadSimple), { reliable: true, topic: "chat" });
-
-                // 3. Send to 'transcription' (Spoofing speech if chat fails)
-                 const payloadTranscript = JSON.stringify({
+                // To fix the "Avatar not responding" issue, we act like a Transcriber.
+                // We send a 'transcription' event which most agents treat exactly like voice input.
+                const transcriptionPayload = JSON.stringify({
+                    type: "transcription",
                     text: text,
                     is_final: true,
-                    type: "transcription"
+                    id: "text-" + Date.now()
                 });
-                await currentRoom.localParticipant.publishData(encoder.encode(payloadTranscript), { reliable: true, topic: "transcription" });
+
+                const data = encoder.encode(transcriptionPayload);
+
+                // Broadcast on the default channel (reliable)
+                await currentRoom.localParticipant.publishData(data, { reliable: true });
+                
+                // Broadcast on the specific 'transcription' topic
+                await currentRoom.localParticipant.publishData(data, { reliable: true, topic: "transcription" });
+
+                // Also try the standard chat topic just in case
+                await currentRoom.localParticipant.publishData(data, { reliable: true, topic: "lk.chat" });
 
                 inputField.value = "";
                 
@@ -403,14 +396,6 @@
                 console.error(e);
                 setProcessing(false);
                 updateStatus("Send Failed");
-            } finally {
-                if (wasMicEnabled) {
-                    setTimeout(async () => {
-                        try {
-                            await currentRoom.localParticipant.setMicrophoneEnabled(true);
-                        } catch(e) { console.warn("Failed to restore mic"); }
-                    }, 500); 
-                }
             }
         }
 
