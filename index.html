@@ -294,8 +294,9 @@
                         // Determine the Speaker based on the event payload
                         let senderName = "AI Eddie"; // Default to AI
                         
-                        // Check if this is a transcript of the USER
-                        // LiveAvatar Full Mode often echoes back user text or "transcription" events
+                        // FIX: Check if this is a transcript of the USER
+                        // LiveAvatar Full Mode echoes back user text or "transcription" events
+                        // We check specifically for role='user' or 'transcription' types
                         if (jsonData.role === 'user' || jsonData.type === 'transcription' || jsonData.type === 'transcript') {
                             senderName = "User";
                         }
@@ -311,7 +312,7 @@
                             appendToTranscript(senderName, messageText);
                         }
                     } catch(e) {
-                        // Fallback for raw text
+                        // Fallback for raw text - assume AI
                         if (strData && strData.length > 0) {
                              appendToTranscript("AI Eddie", strData);
                         }
@@ -399,7 +400,7 @@
         }
 
         // --- FIXED TEXT COMMAND SENDING (Client-side Command) ---
-        // Sends a Command Event as per Full Mode docs
+        // FIX: Sends a Command Event as per Full Mode docs 
         async function sendTextCommand() {
             const inputField = document.getElementById('textCommand');
             const text = inputField.value.trim();
@@ -420,7 +421,7 @@
                 const timestamp = Date.now();
 
                 // 2. SEND COMMAND PAYLOAD
-                // "Command / Client-side events allow developers to send signals"
+                // "Command / Client-side events allow developers to send signals" 
                 // We send a 'conversation.input' event to instruct the avatar.
                 const commandPayload = JSON.stringify({
                     type: "conversation.input", // Explicit command type
