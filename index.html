@@ -25,7 +25,7 @@
             height: 4px;
             background: linear-gradient(90deg, #0070f3, #00c6ff);
             z-index: 1000;
-            display: none; /* Hidden by default */
+            display: none; 
             animation: pulse 1.5s infinite;
         }
         @keyframes pulse {
@@ -210,10 +210,7 @@
                     const last = event.results.length - 1;
                     const text = event.results[last][0].transcript;
                     
-                    // Show processing immediately after user speaks
                     setProcessing(true);
-                    
-                    // Log locally
                     appendToTranscript("User (Speech)", text);
                 };
             } else {
@@ -263,7 +260,6 @@
 
                 // --- DATA HANDLING (Responses) ---
                 currentRoom.on(LivekitClient.RoomEvent.DataReceived, (payload) => {
-                    // Agent responded, stop processing
                     setProcessing(false);
 
                     const decoder = new TextDecoder();
@@ -272,23 +268,18 @@
                     try {
                         const jsonData = JSON.parse(strData);
                         
-                        // 1. Filter out technical events
                         if (["user.speak_started", "user.speak_ended", "agent.thinking"].includes(jsonData.event_type)) {
                             return;
                         }
 
-                        // 2. Identify Sender
-                        // If the server says role='user' OR event_type='transcript', it's echoing the user
+                        // Ignore echo of user speech
                         const isUserEcho = (jsonData.role === 'user') || 
                                          (jsonData.event_type === 'transcript') ||
-                                         (jsonData.type === 'transcript');
+                                         (jsonData.type === 'transcript') || 
+                                         (jsonData.type === 'transcription');
 
-                        // If it is the user echo, DO NOT log as Eddie.
-                        if (isUserEcho) {
-                             return; // Skip logging, as we already logged "User (Speech)" locally
-                        }
+                        if (isUserEcho) return; 
 
-                        // 3. Extract Text
                         let messageText = jsonData.text || jsonData.message || jsonData.transcript;
 
                         if (messageText) {
@@ -296,7 +287,6 @@
                         }
 
                     } catch(e) {
-                        // Raw text fallback
                         if (strData && strData.length > 0) appendToTranscript("AI Eddie", strData);
                     }
                 });
@@ -307,7 +297,6 @@
                 document.getElementById('micBtn').disabled = false;
                 document.getElementById('sendBtn').disabled = false;
 
-                // Auto-start Mic
                 try {
                     await currentRoom.localParticipant.setMicrophoneEnabled(true);
                     document.getElementById('micBtn').classList.add("active-mic");
@@ -345,40 +334,37 @@
             if (event.key === "Enter") sendTextCommand();
         }
 
-        // --- FIXED TEXT COMMAND SENDING ---
+        // --- FIXED TEXT COMMAND SENDING (SPOOFING SPEECH) ---
         async function sendTextCommand() {
             const inputField = document.getElementById('textCommand');
             const text = inputField.value.trim();
             if (!text || !currentRoom) return;
 
-            setProcessing(true); // Show indicator
+            setProcessing(true);
             appendToTranscript("User (Text)", text);
 
             try {
                 const encoder = new TextEncoder();
                 
-                // Construct a robust JSON payload that works with most Agents
-                const payloadObj = {
+                // --- STRATEGY: MIMIC A SPEECH TRANSCRIPTION ---
+                // We send a packet that looks like a final speech result.
+                // This tricks the agent into thinking you spoke this text.
+                const transcriptionPayload = JSON.stringify({
+                    type: "transcription",
                     text: text,
-                    message: text,
-                    content: text,
-                    type: "chat",
-                    timestamp: Date.now()
-                };
-                const jsonStr = JSON.stringify(payloadObj);
-                const encodedData = encoder.encode(jsonStr);
+                    is_final: true,
+                    confidence: 1.0,
+                    id: Date.now().toString()
+                });
+                
+                const encodedData = encoder.encode(transcriptionPayload);
 
-                // --- SHOTGUN APPROACH ---
-                // Send to multiple topics to ensure the agent "hears" it
-                
-                // 1. Standard "chat" topic
-                await currentRoom.localParticipant.publishData(encodedData, { reliable: true, topic: "chat" });
-                
-                // 2. LiveKit Agent topic
-                await currentRoom.localParticipant.publishData(encodedData, { reliable: true, topic: "lk-chat-topic" });
-                
-                // 3. Default topic (no topic)
+                // 1. Send as default data (Reliable)
                 await currentRoom.localParticipant.publishData(encodedData, { reliable: true });
+
+                // 2. Send as "transcription" topic (Reliable)
+                // Some agents listen specifically for this topic
+                await currentRoom.localParticipant.publishData(encodedData, { reliable: true, topic: "transcription" });
 
                 inputField.value = "";
             } catch (e) {
