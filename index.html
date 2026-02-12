@@ -16,6 +16,23 @@
         }
         h1 { margin-bottom: 20px; color: #333; }
         
+        /* Disconnect Message Style */
+        #disconnect-msg {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            background-color: #ff4d4f; /* Red alert color */
+            color: white;
+            text-align: center;
+            padding: 15px;
+            font-weight: bold;
+            font-size: 16px;
+            z-index: 2000;
+            display: none; /* Hidden by default */
+            box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+        }
+
         #processing-bar {
             position: fixed;
             top: 0;
@@ -128,6 +145,8 @@
 </head>
 <body>
 
+    <div id="disconnect-msg">Session Disconnected. Please hit "Start & Connect" to start a new session.</div>
+
     <div id="processing-bar"></div>
     <div id="processing-text">Processing...</div>
 
@@ -144,10 +163,10 @@
 
     <div class="transcript-container">
         <div class="transcript-header">
-            <h3>Debug Log & Transcript</h3>
+            <h3>Conversation Transcript</h3>
             <button onclick="downloadTranscript()" style="background-color:#28a745; padding:8px 16px; font-size:14px;">Download Log</button>
         </div>
-        <textarea id="transcriptLog" readonly placeholder="System logs will appear here..."></textarea>
+        <textarea id="transcriptLog" readonly placeholder="Conversation history will appear here..."></textarea>
         
         <div class="input-group">
             <input type="text" id="textCommand" placeholder="Type a command..." onkeypress="handleInputKey(event)">
@@ -160,8 +179,23 @@
         let processingTimeout = null;
         let agentAudioInterval = null;
         let currentSessionId = null; 
+        let inactivityTimer = null; // Timer variable
         
         const SNAPLOGIC_URL = "https://tpalpb1wva002.verizon.com:8888/api/1/rest/feed/run/task/VerizonEISDev/DeliveryAssurance/shared/Embedded_Agent_Token_Request%20Task_Gnd?bearer_token=8tn6rpItp0F8RIYNNGq2LECBvdi9is2X";
+
+        // --- INACTIVITY TIMER LOGIC ---
+        function resetInactivityTimer() {
+            if (inactivityTimer) clearTimeout(inactivityTimer);
+            
+            // Only start timer if we are actually connected
+            if (currentRoom && currentRoom.state === 'connected') {
+                console.log("[TIMER] Inactivity timer reset. Disconnecting in 30s if no input.");
+                inactivityTimer = setTimeout(() => {
+                    logToConsole("[SYSTEM] 30 seconds inactivity timeout reached.");
+                    disconnect();
+                }, 30000); // 30 seconds
+            }
+        }
 
         function setProcessing(isProcessing) {
             const bar = document.getElementById('processing-bar');
@@ -186,11 +220,28 @@
         }
 
         function logToConsole(message) {
-            const log = document.getElementById('transcriptLog');
-            const timestamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', fraction: '3-digit' });
-            log.value += `[${timestamp}] ${message}\n`;
-            log.scrollTop = log.scrollHeight; 
+            // Always log to browser dev tools for debugging
             console.log(message);
+            
+            // Filter: Only show User Input and AI Responses in the UI textarea
+            // We look for specific prefixes used in the code
+            const isUser = message.startsWith("[USER-INPUT]");
+            const isAgent = message.startsWith("[AI EDDIE]");
+            
+            if (isUser || isAgent) {
+                const log = document.getElementById('transcriptLog');
+                const timestamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+                
+                // Clean up the message for display (Optional: remove tags)
+                let displayMsg = message;
+                if (isUser) displayMsg = message.replace("[USER-INPUT] Sending:", "User:");
+                if (isAgent) displayMsg = message.replace("[AI EDDIE]:", "Avatar:");
+                // Remove quotes if present at start/end of content
+                displayMsg = displayMsg.replace(/"/g, '');
+
+                log.value += `[${timestamp}] ${displayMsg}\n`;
+                log.scrollTop = log.scrollHeight; 
+            }
         }
 
         function downloadTranscript() {
@@ -199,16 +250,20 @@
             const url = window.URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
-            a.download = `debug_log.txt`;
+            a.download = `transcript_log.txt`;
             a.click();
         }
 
         async function initSession() {
             if (currentRoom) return;
+            
+            // UI Reset
             document.getElementById('connectBtn').disabled = true;
+            document.getElementById('disconnect-msg').style.display = 'none'; // Hide disconnect msg
             updateStatus("Requesting Token...");
             document.getElementById('transcriptLog').value = ""; 
             currentSessionId = null; 
+            
             logToConsole("[SYSTEM] Starting Session Init...");
 
             try {
@@ -290,8 +345,16 @@
                     } catch(e) {}
                 });
                 
-                currentRoom.on(LivekitClient.RoomEvent.Connected, () => logToConsole("[ROOM] Connected"));
-                currentRoom.on(LivekitClient.RoomEvent.Disconnected, () => logToConsole("[ROOM] Disconnected"));
+                currentRoom.on(LivekitClient.RoomEvent.Connected, () => {
+                    logToConsole("[ROOM] Connected");
+                    resetInactivityTimer(); // Start timer on connect
+                });
+                
+                currentRoom.on(LivekitClient.RoomEvent.Disconnected, () => {
+                    logToConsole("[ROOM] Disconnected");
+                    // Ensure cleanup happens even if disconnected from server side
+                    handleDisconnectUI();
+                });
 
                 await currentRoom.connect(url, token);
                 
@@ -333,6 +396,7 @@
                 btn.classList.remove("active-mic");
                 logToConsole("[USER] Mic Muted");
             }
+            resetInactivityTimer(); // Interaction resets timer
         }
 
         function handleInputKey(event) {
@@ -345,6 +409,8 @@
             const inputField = document.getElementById('textCommand');
             const text = inputField.value.trim();
             if (!text || !currentRoom) return;
+
+            resetInactivityTimer(); // Reset timer on user input
 
             setProcessing(true); 
             logToConsole(`[USER-INPUT] Sending: "${text}"`);
@@ -410,10 +476,11 @@
             }
         }
 
-        async function disconnect() {
-            logToConsole("[USER] Disconnecting...");
-            if (currentRoom) await currentRoom.disconnect();
-            if (agentAudioInterval) clearInterval(agentAudioInterval);
+        // Shared logic for cleanup/UI updates on disconnect
+        function handleDisconnectUI() {
+             if (agentAudioInterval) clearInterval(agentAudioInterval);
+            if (inactivityTimer) clearTimeout(inactivityTimer);
+            
             setProcessing(false);
             document.getElementById('video-container').innerHTML = '';
             document.getElementById('disconnectBtn').disabled = true;
@@ -421,7 +488,19 @@
             document.getElementById('micBtn').classList.remove("active-mic");
             document.getElementById('micBtn').disabled = true;
             document.getElementById('connectBtn').disabled = false;
-            currentRoom = null;
+            
+            // Show the top banner message
+            document.getElementById('disconnect-msg').style.display = 'block';
+            updateStatus("Disconnected");
+        }
+
+        async function disconnect() {
+            logToConsole("[USER] Disconnecting...");
+            if (currentRoom) {
+                await currentRoom.disconnect();
+                currentRoom = null;
+            }
+            handleDisconnectUI();
         }
 
         function updateStatus(msg) {
