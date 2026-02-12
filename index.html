@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Device Showcase Virtual Coworker (No Duplicates)</title>
+    <title>Device Showcase (Dual Timers)</title>
     <script src="https://cdn.jsdelivr.net/npm/livekit-client/dist/livekit-client.umd.min.js"></script>
     <style>
         body { 
@@ -171,7 +171,7 @@
 </head>
 <body>
 
-    <div id="disconnect-msg">Session Disconnected. Please hit "Start & Connect" to start a new session.</div>
+    <div id="disconnect-msg"></div>
 
     <div id="processing-bar"></div>
     <div id="processing-text">Processing...</div>
@@ -208,20 +208,23 @@
         let processingTimeout = null;
         let agentAudioInterval = null;
         let currentSessionId = null; 
-        let inactivityTimer = null; 
         
-        // Track the last sent text to avoid duplicates from server echoes
+        // --- TIMERS ---
+        let inactivityTimer = null; 
+        let sessionLimitTimer = null; 
+        
         let lastSentText = ""; 
         
         const SNAPLOGIC_URL = "https://tpalpb1wva002.verizon.com:8888/api/1/rest/feed/run/task/VerizonEISDev/DeliveryAssurance/shared/Embedded_Agent_Token_Request%20Task_Gnd?bearer_token=8tn6rpItp0F8RIYNNGq2LECBvdi9is2X";
 
+        // 1. Inactivity Timer Logic (Resets on interaction)
         function resetInactivityTimer() {
             if (inactivityTimer) clearTimeout(inactivityTimer);
             if (currentRoom && currentRoom.state === 'connected') {
                 inactivityTimer = setTimeout(() => {
-                    logToConsole("[SYSTEM] 30 seconds inactivity timeout reached.");
-                    disconnect();
-                }, 30000); 
+                    logToConsole("[SYSTEM] 30s Inactivity Timeout.");
+                    disconnect("Inactivity Timeout. Please hit \"Start & Connect\" to start a new session.");
+                }, 30000); // 30 seconds
             }
         }
 
@@ -260,7 +263,6 @@
                 if (isUser) displayMsg = message.replace("[USER-INPUT]", "User:");
                 if (isAgent) displayMsg = message.replace("[AI EDDIE]:", "Avatar:");
                 
-                // Cleanup display text
                 displayMsg = displayMsg.replace("Sending:", "").replace("Transcribed:", "");
                 displayMsg = displayMsg.replace(/"/g, '').trim();
 
@@ -287,7 +289,7 @@
             updateStatus("Requesting Token...");
             document.getElementById('transcriptLog').value = ""; 
             currentSessionId = null; 
-            lastSentText = ""; // Reset tracker
+            lastSentText = ""; 
             
             logToConsole("[SYSTEM] Starting Session Init...");
 
@@ -364,20 +366,17 @@
                         
                         if (jsonData.event_type === "avatar.transcription") {
                             logToConsole(`[AI EDDIE]: "${jsonData.text}"`);
-                            resetInactivityTimer();
+                            resetInactivityTimer(); // Interaction detected
                         }
                         
-                        // --- HANDLING USER INPUT ---
                         if (jsonData.event_type === "user.transcription") {
-                            // Deduplication Check
                             if (jsonData.text === lastSentText) {
                                 console.log("[INFO] Ignored duplicate transcription echo.");
                             } else {
                                 logToConsole(`[USER-INPUT] Transcribed: "${jsonData.text}"`);
                             }
-                            resetInactivityTimer();
-                            // Clear lastSentText after processing to allow repetition later
                             lastSentText = ""; 
+                            resetInactivityTimer(); // Interaction detected
                         }
 
                     } catch(e) {}
@@ -385,12 +384,23 @@
                 
                 currentRoom.on(LivekitClient.RoomEvent.Connected, () => {
                     logToConsole("[ROOM] Connected");
+                    
+                    // Start Inactivity Timer
                     resetInactivityTimer();
+
+                    // 2. Start Demo Limit Timer (60s Hard Limit)
+                    if (sessionLimitTimer) clearTimeout(sessionLimitTimer);
+                    logToConsole("[SYSTEM] 60s Demo Timer Started");
+                    sessionLimitTimer = setTimeout(() => {
+                        logToConsole("[SYSTEM] 60s Demo Limit Reached.");
+                        disconnect("This demo version has 1 minute timeout. Please hit \"Start & Connect\" to start a new session.");
+                    }, 60000); 
                 });
                 
                 currentRoom.on(LivekitClient.RoomEvent.Disconnected, () => {
                     logToConsole("[ROOM] Disconnected");
-                    handleDisconnectUI();
+                    // Default message if disconnected manually or by server error
+                    handleDisconnectUI("Session Disconnected. Please hit \"Start & Connect\" to start a new session.");
                 });
 
                 await currentRoom.connect(url, token);
@@ -433,7 +443,7 @@
                 btn.classList.remove("active-mic");
                 logToConsole("[USER] Mic Muted");
             }
-            resetInactivityTimer();
+            resetInactivityTimer(); // Interaction detected
         }
 
         function handleInputKey(event) {
@@ -445,14 +455,11 @@
             const text = inputField.value.trim();
             if (!text || !currentRoom) return;
 
-            resetInactivityTimer(); 
+            resetInactivityTimer(); // Interaction detected
 
             setProcessing(true); 
             
-            // Log locally first for responsiveness
             logToConsole(`[USER-INPUT] Sending: "${text}"`);
-            
-            // Update global variable to filter the echo later
             lastSentText = text;
 
             if (!currentSessionId) {
@@ -486,8 +493,10 @@
             }
         }
 
-        function handleDisconnectUI() {
-             if (agentAudioInterval) clearInterval(agentAudioInterval);
+        // Updated to accept a custom message
+        function handleDisconnectUI(customMessage) {
+            if (agentAudioInterval) clearInterval(agentAudioInterval);
+            if (sessionLimitTimer) clearTimeout(sessionLimitTimer);
             if (inactivityTimer) clearTimeout(inactivityTimer);
             
             setProcessing(false);
@@ -498,17 +507,27 @@
             document.getElementById('micBtn').disabled = true;
             document.getElementById('connectBtn').disabled = false;
             
-            document.getElementById('disconnect-msg').style.display = 'block';
+            // Set dynamic message
+            const msgDiv = document.getElementById('disconnect-msg');
+            msgDiv.innerText = customMessage || "Session Disconnected. Please hit \"Start & Connect\" to start a new session.";
+            msgDiv.style.display = 'block';
+            
             updateStatus("Disconnected");
         }
 
-        async function disconnect() {
-            logToConsole("[USER] Disconnecting...");
+        async function disconnect(reason) {
+            logToConsole(`[USER] Disconnecting... Reason: ${reason || "Manual"}`);
+            
+            // We store the reason in a temporary variable if we need it after async disconnect
+            // But simplified: we call handleDisconnectUI immediately with the reason
+            
             if (currentRoom) {
+                // Remove the standard listener to prevent it from overwriting our custom message
+                currentRoom.removeAllListeners(LivekitClient.RoomEvent.Disconnected);
                 await currentRoom.disconnect();
                 currentRoom = null;
             }
-            handleDisconnectUI();
+            handleDisconnectUI(reason);
         }
 
         function updateStatus(msg) {
