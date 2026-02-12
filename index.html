@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Device Showcase Virtual Coworker (Paced Hybrid Fix)</title>
+    <title>Device Showcase Virtual Coworker (Fixed Text)</title>
     <script src="https://cdn.jsdelivr.net/npm/livekit-client/dist/livekit-client.umd.min.js"></script>
     <style>
         body { 
@@ -224,7 +224,6 @@
             console.log(message);
             
             // Filter: Only show User Input and AI Responses in the UI textarea
-            // We look for specific prefixes used in the code
             const isUser = message.startsWith("[USER-INPUT]");
             const isAgent = message.startsWith("[AI EDDIE]");
             
@@ -232,11 +231,12 @@
                 const log = document.getElementById('transcriptLog');
                 const timestamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
                 
-                // Clean up the message for display (Optional: remove tags)
+                // Clean up the message for display
                 let displayMsg = message;
                 if (isUser) displayMsg = message.replace("[USER-INPUT] Sending:", "User:");
                 if (isAgent) displayMsg = message.replace("[AI EDDIE]:", "Avatar:");
-                // Remove quotes if present at start/end of content
+                
+                // Remove extra quotes
                 displayMsg = displayMsg.replace(/"/g, '');
 
                 log.value += `[${timestamp}] ${displayMsg}\n`;
@@ -327,6 +327,7 @@
                         const jsonData = JSON.parse(strData);
                         
                         // CAPTURE SESSION ID
+                        // This is critical for sending commands later
                         if (jsonData.session_id) {
                             if (currentSessionId !== jsonData.session_id) {
                                 currentSessionId = jsonData.session_id;
@@ -334,13 +335,15 @@
                             }
                         }
 
-                        // Stop processing on ANY agent activity
+                        // Stop processing indicator on any agent activity
                         if (jsonData.event_type && (jsonData.event_type.startsWith('avatar') || jsonData.event_type.startsWith('agent'))) {
                             setProcessing(false);
                         }
                         
+                        // Log transcription for the UI
                         if (jsonData.event_type === "avatar.transcription") {
                             logToConsole(`[AI EDDIE]: "${jsonData.text}"`);
+                            resetInactivityTimer(); // Reset timer when agent speaks
                         }
                     } catch(e) {}
                 });
@@ -352,7 +355,6 @@
                 
                 currentRoom.on(LivekitClient.RoomEvent.Disconnected, () => {
                     logToConsole("[ROOM] Disconnected");
-                    // Ensure cleanup happens even if disconnected from server side
                     handleDisconnectUI();
                 });
 
@@ -403,8 +405,8 @@
             if (event.key === "Enter") sendTextCommand();
         }
 
-        // --- PACED HYBRID SEND STRATEGY ---
-        // Sends both a Command and a Simulated Voice Sequence with human-like delays
+        // --- FIXED SEND STRATEGY ---
+        // Uses explicit 'avatar.speak_response' event on the 'agent-control' topic
         async function sendTextCommand() {
             const inputField = document.getElementById('textCommand');
             const text = inputField.value.trim();
@@ -415,64 +417,39 @@
             setProcessing(true); 
             logToConsole(`[USER-INPUT] Sending: "${text}"`);
 
-            if (!currentSessionId) logToConsole("[WARN] No Session ID! Command may fail.");
-            
-            // 1. Mute Mic
-            const wasMicEnabled = currentRoom.localParticipant.isMicrophoneEnabled;
-            if (wasMicEnabled) await currentRoom.localParticipant.setMicrophoneEnabled(false);
+            if (!currentSessionId) {
+                logToConsole("[WARN] No Session ID! Command may fail. Waiting for server event...");
+                // Note: Commands often fail if session_id is missing
+            }
 
             try {
                 const encoder = new TextEncoder();
-                const timestamp = Date.now();
-                const uuid = crypto.randomUUID();
-
-                // PAYLOAD A: DIRECT COMMAND (Type 1)
-                const payloadCommand = JSON.stringify({ 
-                    type: "conversation.input", 
+                
+                // Construct the correct Command Event payload according to Docs
+                // Topic: agent-control
+                // Event Type: avatar.speak_response (triggers LLM response)
+                const payload = JSON.stringify({ 
+                    event_type: "avatar.speak_response", 
                     text: text,
-                    session_id: currentSessionId
+                    session_id: currentSessionId || "" 
                 });
 
-                // PAYLOAD B: VOICE SEQUENCE (Type 2)
-                const payloadStart = JSON.stringify({ event_type: "user.speak_started", timestamp: Date.now(), session_id: currentSessionId });
-                const payloadTrans = JSON.stringify({ event_type: "user.transcription", text: text, is_final: true, timestamp: Date.now()+100, session_id: currentSessionId, event_id: uuid });
-                const payloadEnd = JSON.stringify({ event_type: "user.speak_ended", timestamp: Date.now()+500, session_id: currentSessionId });
-
-                // --- EXECUTE PACED SEQUENCE ---
+                // Publish to the specific 'agent-control' topic
+                await currentRoom.localParticipant.publishData(
+                    encoder.encode(payload), 
+                    { 
+                        reliable: true, 
+                        topic: "agent-control" 
+                    }
+                );
                 
-                // 1. Send Direct Command First (Fast Path)
-                await currentRoom.localParticipant.publishData(encoder.encode(payloadCommand), { reliable: true });
-                logToConsole(`[SENT] Command: conversation.input`);
-
-                await new Promise(r => setTimeout(r, 200)); // Small delay
-
-                // 2. Simulate VAD Open
-                await currentRoom.localParticipant.publishData(encoder.encode(payloadStart), { reliable: true });
-                logToConsole(`[SENT] Seq: user.speak_started`);
-
-                await new Promise(r => setTimeout(r, 300)); // Human reaction delay
-
-                // 3. Simulate Transcription
-                await currentRoom.localParticipant.publishData(encoder.encode(payloadTrans), { reliable: true });
-                logToConsole(`[SENT] Seq: user.transcription ("${text}")`);
-
-                await new Promise(r => setTimeout(r, 300)); // Processing delay
-
-                // 4. Simulate VAD Close (This triggers response)
-                await currentRoom.localParticipant.publishData(encoder.encode(payloadEnd), { reliable: true });
-                logToConsole(`[SENT] Seq: user.speak_ended`);
+                logToConsole(`[SENT] Topic: agent-control | Type: avatar.speak_response`);
 
                 inputField.value = "";
                 
             } catch (e) {
                 logToConsole(`[ERROR] Send Failed: ${e.message}`);
                 setProcessing(false);
-            } finally {
-                if (wasMicEnabled) {
-                    setTimeout(async () => {
-                        try { await currentRoom.localParticipant.setMicrophoneEnabled(true); } catch(e) {}
-                    }, 2000); 
-                }
             }
         }
 
