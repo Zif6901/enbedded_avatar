@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Device Showcase Virtual Coworker (Side Controls)</title>
+    <title>Device Showcase Virtual Coworker (Fixed Transcript)</title>
     <script src="https://cdn.jsdelivr.net/npm/livekit-client/dist/livekit-client.umd.min.js"></script>
     <style>
         body { 
@@ -16,7 +16,6 @@
         }
         h1 { margin-bottom: 10px; color: #333; }
         
-        /* Disconnect Message Style */
         #disconnect-msg {
             position: fixed;
             top: 0;
@@ -63,19 +62,18 @@
             box-shadow: 0 2px 5px rgba(0,0,0,0.2);
         }
 
-        /* Main Row for Side-by-Side Layout */
         .main-row {
             display: flex;
             flex-direction: row;
             gap: 20px;
             width: 100%;
             max-width: 1000px;
-            align-items: flex-start; /* Align to top */
+            align-items: flex-start;
             margin-top: 20px;
         }
 
         #video-container { 
-            flex-grow: 1; /* Takes up remaining space */
+            flex-grow: 1;
             aspect-ratio: 16/9; 
             background: #000; 
             position: relative; 
@@ -86,12 +84,11 @@
         
         video, audio { width: 100%; height: 100%; object-fit: cover; }
 
-        /* Sidebar Controls */
         .controls { 
             display: flex; 
-            flex-direction: column; /* Stack vertically */
+            flex-direction: column; 
             gap: 15px; 
-            width: 200px; /* Fixed width for sidebar */
+            width: 200px; 
             padding: 20px; 
             background: white; 
             border-radius: 8px;
@@ -100,7 +97,7 @@
         }
         
         button { 
-            width: 100%; /* Full width buttons */
+            width: 100%; 
             padding: 15px; 
             cursor: pointer; 
             background-color: #0070f3; 
@@ -118,7 +115,7 @@
         
         .transcript-container {
             width: 100%;
-            max-width: 1000px; /* Matched to main row width */
+            max-width: 1000px; 
             margin-top: 20px;
             background: white;
             padding: 20px;
@@ -167,7 +164,7 @@
             font-size: 14px;
         }
 
-        button#sendBtn { width: auto; } /* Keep send button standard size */
+        button#sendBtn { width: auto; }
         
         #status { margin-bottom: 5px; color: #666; font-family: monospace; font-size: 14px; }
     </style>
@@ -249,6 +246,7 @@
 
         function logToConsole(message) {
             console.log(message);
+            // Filters for both User Input and AI responses
             const isUser = message.startsWith("[USER-INPUT]");
             const isAgent = message.startsWith("[AI EDDIE]");
             
@@ -257,6 +255,7 @@
                 const timestamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
                 
                 let displayMsg = message;
+                // Formatting for readability
                 if (isUser) displayMsg = message.replace("[USER-INPUT] Sending:", "User:");
                 if (isAgent) displayMsg = message.replace("[AI EDDIE]:", "Avatar:");
                 displayMsg = displayMsg.replace(/"/g, '');
@@ -430,6 +429,8 @@
             resetInactivityTimer(); 
 
             setProcessing(true); 
+            
+            // --- FIX: Explicitly log user input to transcript here ---
             logToConsole(`[USER-INPUT] Sending: "${text}"`);
 
             if (!currentSessionId) {
@@ -453,7 +454,8 @@
                     }
                 );
                 
-                logToConsole(`[SENT] Topic: agent-control | Type: avatar.speak_response`);
+                // Note: We log the internal event for debugging, but the user text is already logged above
+                console.log(`[SENT] Topic: agent-control | Type: avatar.speak_response`);
 
                 inputField.value = "";
                 
