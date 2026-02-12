@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Device Showcase Virtual Coworker (Transcript Fix)</title>
+    <title>Device Showcase Virtual Coworker (No Duplicates)</title>
     <script src="https://cdn.jsdelivr.net/npm/livekit-client/dist/livekit-client.umd.min.js"></script>
     <style>
         body { 
@@ -210,6 +210,9 @@
         let currentSessionId = null; 
         let inactivityTimer = null; 
         
+        // Track the last sent text to avoid duplicates from server echoes
+        let lastSentText = ""; 
+        
         const SNAPLOGIC_URL = "https://tpalpb1wva002.verizon.com:8888/api/1/rest/feed/run/task/VerizonEISDev/DeliveryAssurance/shared/Embedded_Agent_Token_Request%20Task_Gnd?bearer_token=8tn6rpItp0F8RIYNNGq2LECBvdi9is2X";
 
         function resetInactivityTimer() {
@@ -257,9 +260,8 @@
                 if (isUser) displayMsg = message.replace("[USER-INPUT]", "User:");
                 if (isAgent) displayMsg = message.replace("[AI EDDIE]:", "Avatar:");
                 
-                // Remove internal logging prefixes if present in display
+                // Cleanup display text
                 displayMsg = displayMsg.replace("Sending:", "").replace("Transcribed:", "");
-                // Remove quotes
                 displayMsg = displayMsg.replace(/"/g, '').trim();
 
                 log.value += `[${timestamp}] ${displayMsg}\n`;
@@ -285,6 +287,7 @@
             updateStatus("Requesting Token...");
             document.getElementById('transcriptLog').value = ""; 
             currentSessionId = null; 
+            lastSentText = ""; // Reset tracker
             
             logToConsole("[SYSTEM] Starting Session Init...");
 
@@ -359,16 +362,22 @@
                             setProcessing(false);
                         }
                         
-                        // --- HANDLE AVATAR SPEECH ---
                         if (jsonData.event_type === "avatar.transcription") {
                             logToConsole(`[AI EDDIE]: "${jsonData.text}"`);
                             resetInactivityTimer();
                         }
                         
-                        // --- FIX: HANDLE USER SPEECH ---
+                        // --- HANDLING USER INPUT ---
                         if (jsonData.event_type === "user.transcription") {
-                            logToConsole(`[USER-INPUT] Transcribed: "${jsonData.text}"`);
+                            // Deduplication Check
+                            if (jsonData.text === lastSentText) {
+                                console.log("[INFO] Ignored duplicate transcription echo.");
+                            } else {
+                                logToConsole(`[USER-INPUT] Transcribed: "${jsonData.text}"`);
+                            }
                             resetInactivityTimer();
+                            // Clear lastSentText after processing to allow repetition later
+                            lastSentText = ""; 
                         }
 
                     } catch(e) {}
@@ -440,8 +449,11 @@
 
             setProcessing(true); 
             
-            // Explicitly log the text command immediately so it appears in the UI
+            // Log locally first for responsiveness
             logToConsole(`[USER-INPUT] Sending: "${text}"`);
+            
+            // Update global variable to filter the echo later
+            lastSentText = text;
 
             if (!currentSessionId) {
                 logToConsole("[WARN] No Session ID! Command may fail. Waiting for server event...");
