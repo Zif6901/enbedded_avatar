@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Device Showcase Virtual Coworker (Fixed Transcript)</title>
+    <title>Device Showcase Virtual Coworker (Transcript Fix)</title>
     <script src="https://cdn.jsdelivr.net/npm/livekit-client/dist/livekit-client.umd.min.js"></script>
     <style>
         body { 
@@ -246,7 +246,6 @@
 
         function logToConsole(message) {
             console.log(message);
-            // Filters for both User Input and AI responses
             const isUser = message.startsWith("[USER-INPUT]");
             const isAgent = message.startsWith("[AI EDDIE]");
             
@@ -255,10 +254,13 @@
                 const timestamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
                 
                 let displayMsg = message;
-                // Formatting for readability
-                if (isUser) displayMsg = message.replace("[USER-INPUT] Sending:", "User:");
+                if (isUser) displayMsg = message.replace("[USER-INPUT]", "User:");
                 if (isAgent) displayMsg = message.replace("[AI EDDIE]:", "Avatar:");
-                displayMsg = displayMsg.replace(/"/g, '');
+                
+                // Remove internal logging prefixes if present in display
+                displayMsg = displayMsg.replace("Sending:", "").replace("Transcribed:", "");
+                // Remove quotes
+                displayMsg = displayMsg.replace(/"/g, '').trim();
 
                 log.value += `[${timestamp}] ${displayMsg}\n`;
                 log.scrollTop = log.scrollHeight; 
@@ -357,10 +359,18 @@
                             setProcessing(false);
                         }
                         
+                        // --- HANDLE AVATAR SPEECH ---
                         if (jsonData.event_type === "avatar.transcription") {
                             logToConsole(`[AI EDDIE]: "${jsonData.text}"`);
                             resetInactivityTimer();
                         }
+                        
+                        // --- FIX: HANDLE USER SPEECH ---
+                        if (jsonData.event_type === "user.transcription") {
+                            logToConsole(`[USER-INPUT] Transcribed: "${jsonData.text}"`);
+                            resetInactivityTimer();
+                        }
+
                     } catch(e) {}
                 });
                 
@@ -430,7 +440,7 @@
 
             setProcessing(true); 
             
-            // --- FIX: Explicitly log user input to transcript here ---
+            // Explicitly log the text command immediately so it appears in the UI
             logToConsole(`[USER-INPUT] Sending: "${text}"`);
 
             if (!currentSessionId) {
@@ -454,7 +464,6 @@
                     }
                 );
                 
-                // Note: We log the internal event for debugging, but the user text is already logged above
                 console.log(`[SENT] Topic: agent-control | Type: avatar.speak_response`);
 
                 inputField.value = "";
