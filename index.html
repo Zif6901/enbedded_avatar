@@ -193,7 +193,7 @@
             flex-direction: column;
             gap: 15px;
             width: 100%;
-            max-width: 400px;
+            max-width: 450px; /* Slightly wider to accommodate the new title better */
             text-align: center;
             max-height: 95vh;
             overflow-y: auto;
@@ -203,8 +203,8 @@
             width: 100%;
             border-radius: 8px;
             background: #000;
-            aspect-ratio: 9/16; 
-            object-fit: cover;
+            aspect-ratio: 16/9; /* Wider and shorter */
+            object-fit: contain; /* Prevents zooming in and cropping the vertical video */
         }
 
         .splash-input {
@@ -221,9 +221,9 @@
 
     <div id="splash-screen">
         <div class="splash-content">
-            <h2 style="margin: 0; color: #333;">Welcome</h2>
+            <h2 style="margin: 0; color: #333; font-size: 20px;">Technology Transformation and Integration Live Avatar Demo</h2>
             
-            <video src="Live_Avatar_Demo.mp4" class="splash-video" autoplay loop muted playsinline></video>
+            <video src="Live_Avatar_Demo.mp4" class="splash-video" controls playsinline></video>
             
             <div style="text-align: left; width: 100%;">
                 <label style="font-size: 14px; font-weight: bold; color: #333;">Transcript</label>
@@ -296,14 +296,12 @@
         let processingTimeout = null;
         let agentAudioInterval = null;
         let currentSessionId = null;
-        // --- TIMERS ---
         let inactivityTimer = null; 
         let sessionLimitTimer = null;
         let lastSentText = ""; 
         
         const SNAPLOGIC_URL = "https://tpalpb1wva002.verizon.com:8888/api/1/rest/feed/run/task/VerizonEISDev/DeliveryAssurance/shared/Embedded_Agent_Token_Request%20Task_Gnd?bearer_token=8tn6rpItp0F8RIYNNGq2LECBvdi9is2X";
 
-        // 1. Inactivity Timer Logic (Resets on interaction)
         function resetInactivityTimer() {
             if (inactivityTimer) clearTimeout(inactivityTimer);
             if (currentRoom && currentRoom.state === 'connected') {
@@ -311,7 +309,6 @@
                     logToConsole("[SYSTEM] 30s Inactivity Timeout.");
                     disconnect("Inactivity Timeout. Please hit \"Start & Connect\" to start a new session.");
                 }, 30000);
-            // 30 seconds
             }
         }
 
