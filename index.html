@@ -313,7 +313,7 @@
     </div>
 
     <script>
-        // Updated to use standard GET request and pass data as custom headers
+        // Updated to append data to the URL query string to avoid CORS preflight blocks
         async function handleRegisterBtn() {
             const name = document.getElementById('v_name').value.trim();
             const email = document.getElementById('v_email').value.trim();
@@ -326,18 +326,15 @@
                 registerBtn.innerText = "Sending...";
                 registerBtn.disabled = true;
 
-                const registerUrl = "https://tpalpb1wva002.verizon.com:8888/api/1/rest/feed/run/task/VerizonEISDev/DeliveryAssurance/shared/Embedded_Agent_Token_Request%20Task_Gnd?bearer_token=8tn6rpItp0F8RIYNNGq2LECBvdi9is2X";
+                const baseUrl = "https://tpalpb1wva002.verizon.com:8888/api/1/rest/feed/run/task/VerizonEISDev/DeliveryAssurance/shared/Embedded_Agent_Token_Request%20Task_Gnd?bearer_token=8tn6rpItp0F8RIYNNGq2LECBvdi9is2X";
+                
+                // Construct the final URL with the user data attached as parameters
+                const finalUrl = `${baseUrl}&FullName=${encodeURIComponent(name)}&Email=${encodeURIComponent(email)}&VZID=${encodeURIComponent(vzid)}`;
                 
                 try {
-                    // Send standard GET request passing the data in headers
-                    const response = await fetch(registerUrl, {
-                        method: 'GET',
-                        headers: {
-                            'Accept': 'application/json',
-                            'FullName': name,
-                            'Email': email,
-                            'VZID': vzid
-                        }
+                    // Standard GET request with NO custom headers to ensure it acts as a "Simple Request"
+                    const response = await fetch(finalUrl, {
+                        method: 'GET'
                     });
 
                     if (!response.ok) {
