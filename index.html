@@ -193,7 +193,7 @@
             flex-direction: column;
             gap: 15px;
             width: 100%;
-            max-width: 450px; /* Slightly wider to accommodate the new title better */
+            max-width: 450px;
             text-align: center;
             max-height: 95vh;
             overflow-y: auto;
@@ -203,8 +203,8 @@
             width: 100%;
             border-radius: 8px;
             background: #000;
-            aspect-ratio: 16/9; /* Wider and shorter */
-            object-fit: contain; /* Prevents zooming in and cropping the vertical video */
+            aspect-ratio: 16/9; 
+            object-fit: contain; 
         }
 
         .splash-input {
@@ -289,7 +289,10 @@
         }
 
         function closeSplashBtn() {
+            // Close the splash page
             document.getElementById('splash-screen').style.display = 'none';
+            // Automatically start the connection process
+            initSession();
         }
 
         let currentRoom = null;
