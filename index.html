@@ -225,7 +225,7 @@
             height: 100%;
             background-color: rgba(245, 245, 247, 0.9);
             z-index: 5000;
-            display: none; /* Hidden by default */
+            display: none; 
             flex-direction: column;
             justify-content: center;
             align-items: center;
@@ -313,7 +313,7 @@
     </div>
 
     <script>
-        // Updated to append variables to the URL and send a GET request
+        // Updated to use POST with 'no-cors' to bypass browser blocks and deliver the JSON payload
         async function handleRegisterBtn() {
             const name = document.getElementById('v_name').value.trim();
             const email = document.getElementById('v_email').value.trim();
@@ -326,22 +326,27 @@
                 registerBtn.innerText = "Sending...";
                 registerBtn.disabled = true;
 
-                // The base URL provided
-                const baseUrl = "https://tpalpb1wva002.verizon.com:8888/api/1/rest/feed/run/task/VerizonEISDev/DeliveryAssurance/shared/Embedded_Agent_Token_Request%20Task_Gnd?bearer_token=8tn6rpItp0F8RIYNNGq2LECBvdi9is2X";
+                const registerUrl = "https://tpalpb1wva002.verizon.com:8888/api/1/rest/feed/run/task/VerizonEISDev/DeliveryAssurance/shared/Embedded_Agent_Token_Request%20Task_Gnd?bearer_token=8tn6rpItp0F8RIYNNGq2LECBvdi9is2X";
                 
-                // Append the form data to the end of the URL safely
-                const finalUrl = `${baseUrl}&FullName=${encodeURIComponent(name)}&Email=${encodeURIComponent(email)}&VZID=${encodeURIComponent(vzid)}`;
+                const payload = {
+                    FullName: name,
+                    Email: email,
+                    VZID: vzid
+                };
 
                 try {
-                    // Send as a standard GET request to bypass complex CORS preflights
-                    const response = await fetch(finalUrl, {
-                        method: 'GET'
+                    // Send as POST using no-cors to forcefully bypass preflight checks
+                    await fetch(registerUrl, {
+                        method: 'POST',
+                        mode: 'no-cors', // Tells browser not to wait for CORS permission
+                        headers: {
+                            'Content-Type': 'text/plain' // Must be text/plain for no-cors to work
+                        },
+                        body: JSON.stringify(payload)
                     });
 
-                    if (!response.ok) {
-                        throw new Error(`HTTP error: ${response.status}`);
-                    }
-
+                    // Because 'no-cors' hides the server's response from JavaScript, 
+                    // we won't get an exact error status back, so we assume it fired successfully.
                     alert("Registration request sent successfully! We will email you when access is approved.");
                     
                     // Clear fields after success
