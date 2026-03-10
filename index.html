@@ -313,7 +313,7 @@
     </div>
 
     <script>
-        // Updated to send a JSON POST request instead of mailto
+        // Updated to append variables to the URL and send a GET request
         async function handleRegisterBtn() {
             const name = document.getElementById('v_name').value.trim();
             const email = document.getElementById('v_email').value.trim();
@@ -326,22 +326,16 @@
                 registerBtn.innerText = "Sending...";
                 registerBtn.disabled = true;
 
-                const registerUrl = "https://prod-verizoneisdev-cloudplex-fm.snaplogic.io/api/1/rest/feed/run/task/VerizonEISDev/DeliveryAssurance/shared/Live_Avatar_Email%20Task?bearer_token=WtLCCaljFIR9MMLWcZobJTOQwD1zTTwM";
+                // The base URL provided
+                const baseUrl = "https://tpalpb1wva002.verizon.com:8888/api/1/rest/feed/run/task/VerizonEISDev/DeliveryAssurance/shared/Embedded_Agent_Token_Request%20Task_Gnd?bearer_token=8tn6rpItp0F8RIYNNGq2LECBvdi9is2X";
                 
-                const payload = {
-                    FullName: name,
-                    Email: email,
-                    VZID: vzid
-                };
+                // Append the form data to the end of the URL safely
+                const finalUrl = `${baseUrl}&FullName=${encodeURIComponent(name)}&Email=${encodeURIComponent(email)}&VZID=${encodeURIComponent(vzid)}`;
 
                 try {
-                    const response = await fetch(registerUrl, {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json',
-                            'Accept': 'application/json'
-                        },
-                        body: JSON.stringify(payload)
+                    // Send as a standard GET request to bypass complex CORS preflights
+                    const response = await fetch(finalUrl, {
+                        method: 'GET'
                     });
 
                     if (!response.ok) {
