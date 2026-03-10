@@ -313,7 +313,7 @@
     </div>
 
     <script>
-        // Updated to use POST with 'no-cors' to bypass browser blocks and deliver the JSON payload
+        // Updated to use standard JSON POST request
         async function handleRegisterBtn() {
             const name = document.getElementById('v_name').value.trim();
             const email = document.getElementById('v_email').value.trim();
@@ -326,7 +326,7 @@
                 registerBtn.innerText = "Sending...";
                 registerBtn.disabled = true;
 
-                const registerUrl = "https://tpalpb1wva002.verizon.com:8888/api/1/rest/feed/run/task/VerizonEISDev/DeliveryAssurance/shared/Embedded_Agent_Token_Request%20Task_Gnd?bearer_token=8tn6rpItp0F8RIYNNGq2LECBvdi9is2X";
+                const registerUrl = "https://elastic.snaplogic.com/api/1/rest/slsched/feed/VerizonEISDev/DeliveryAssurance/shared/Embedded_Agent_Token_Request%20Task_Gnd?bearer_token=8tn6rpItp0F8RIYNNGq2LECBvdi9is2X";
                 
                 const payload = {
                     FullName: name,
@@ -335,18 +335,20 @@
                 };
 
                 try {
-                    // Send as POST using no-cors to forcefully bypass preflight checks
-                    await fetch(registerUrl, {
+                    // Send standard POST request with strict JSON headers
+                    const response = await fetch(registerUrl, {
                         method: 'POST',
-                        mode: 'no-cors', // Tells browser not to wait for CORS permission
                         headers: {
-                            'Content-Type': 'text/plain' // Must be text/plain for no-cors to work
+                            'Content-Type': 'application/json',
+                            'Accept': 'application/json'
                         },
                         body: JSON.stringify(payload)
                     });
 
-                    // Because 'no-cors' hides the server's response from JavaScript, 
-                    // we won't get an exact error status back, so we assume it fired successfully.
+                    if (!response.ok) {
+                        throw new Error(`HTTP error: ${response.status}`);
+                    }
+
                     alert("Registration request sent successfully! We will email you when access is approved.");
                     
                     // Clear fields after success
@@ -382,6 +384,7 @@
         let sessionLimitTimer = null;
         let lastSentText = ""; 
         
+        // Note: this original URL remains intact for the Token Request functionality.
         const SNAPLOGIC_URL = "https://tpalpb1wva002.verizon.com:8888/api/1/rest/feed/run/task/VerizonEISDev/DeliveryAssurance/shared/Embedded_Agent_Token_Request%20Task_Gnd?bearer_token=8tn6rpItp0F8RIYNNGq2LECBvdi9is2X";
 
         function resetInactivityTimer() {
