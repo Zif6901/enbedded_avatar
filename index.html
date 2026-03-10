@@ -215,6 +215,40 @@
             font-size: 14px;
             box-sizing: border-box;
         }
+
+        /* Connecting Overlay Styles */
+        #connecting-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(245, 245, 247, 0.9);
+            z-index: 5000;
+            display: none; /* Hidden by default */
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+        }
+
+        #connecting-overlay h2 {
+            color: #0070f3;
+            margin-bottom: 20px;
+        }
+
+        .spinner {
+            border: 5px solid #f3f3f3;
+            border-top: 5px solid #0070f3;
+            border-radius: 50%;
+            width: 50px;
+            height: 50px;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
     </style>
 </head>
 <body>
@@ -239,6 +273,11 @@
                 <button onclick="closeSplashBtn()">Go</button>
             </div>
         </div>
+    </div>
+
+    <div id="connecting-overlay">
+        <h2>Please wait while I connect with Eddie...</h2>
+        <div class="spinner"></div>
     </div>
 
     <div id="disconnect-msg"></div>
@@ -371,6 +410,9 @@
         async function initSession() {
             if (currentRoom) return;
             
+            // Show the connecting overlay
+            document.getElementById('connecting-overlay').style.display = 'flex';
+            
             document.getElementById('connectBtn').disabled = true;
             document.getElementById('disconnect-msg').style.display = 'none'; 
             updateStatus("Requesting Token...");
@@ -404,6 +446,8 @@
                 await connectToLiveKit(innerData.livekit_url, innerData.livekit_client_token);
 
             } catch (error) {
+                // Hide the connecting overlay if an error occurs
+                document.getElementById('connecting-overlay').style.display = 'none';
                 logToConsole(`[ERROR] Init Failed: ${error.message}`);
                 updateStatus("Error: " + error.message);
                 document.getElementById('connectBtn').disabled = false;
@@ -465,6 +509,9 @@
                 currentRoom.on(LivekitClient.RoomEvent.Connected, () => {
                     logToConsole("[ROOM] Connected");
                     resetInactivityTimer();
+                    
+                    // Hide the connecting overlay once successfully connected
+                    document.getElementById('connecting-overlay').style.display = 'none';
              
                     if (sessionLimitTimer) clearTimeout(sessionLimitTimer);
                     logToConsole("[SYSTEM] 60s Demo Timer Started");
@@ -492,6 +539,8 @@
                 }
 
             } catch (error) {
+                // Hide the connecting overlay if an error occurs
+                document.getElementById('connecting-overlay').style.display = 'none';
                 logToConsole(`[ERROR] Connection Failed: ${error.message}`);
                 document.getElementById('connectBtn').disabled = false;
             }
@@ -567,6 +616,9 @@
             if (agentAudioInterval) clearInterval(agentAudioInterval);
             if (sessionLimitTimer) clearTimeout(sessionLimitTimer);
             if (inactivityTimer) clearTimeout(inactivityTimer);
+            
+            // Ensure connecting overlay is hidden if a disconnect happens abruptly
+            document.getElementById('connecting-overlay').style.display = 'none';
             
             setProcessing(false);
             document.getElementById('video-container').innerHTML = '';
